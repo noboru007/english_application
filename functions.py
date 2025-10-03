@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import time
+import warnings
 from pathlib import Path
 import wave
 import pyaudio
@@ -8,6 +9,9 @@ from pydub import AudioSegment
 from audiorecorder import audiorecorder
 import numpy as np
 from scipy.io.wavfile import write
+
+# LangChainの非推奨警告を抑制
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
 from langchain.prompts import (
     ChatPromptTemplate,
     HumanMessagePromptTemplate,

@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import time
+import warnings
 from time import sleep
 from pathlib import Path
 from streamlit.components.v1 import html
@@ -17,6 +18,9 @@ from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import functions as ft
 import constants as ct
+
+# LangChainの非推奨警告を抑制
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
 
 
 # 各種設定
