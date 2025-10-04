@@ -159,21 +159,23 @@ def create_chain(system_template=None, english_level=None):
 
     # 改善点アドバイス機能を追加したプロンプト
     improvement_context = ""
+    audio_improvement_context = ""
+    
+    # テキスト改善点分析結果
     if hasattr(st.session_state, 'last_improvement_analysis') and st.session_state.last_improvement_analysis:
-        improvement_context = f"""
-
-【前回の改善点分析結果】
-{st.session_state.last_improvement_analysis}
-
-上記の改善点を参考に、今回の会話で自然にアドバイスを織り込んでください。"""
+        improvement_context = ct.SYSTEM_TEMPLATE_TEXT_IMPROVEMENT_INTEGRATION.format(
+            text_improvement_analysis=st.session_state.last_improvement_analysis
+        )
+    
+    # 音声改善点分析結果
+    if hasattr(st.session_state, 'last_audio_improvement_analysis') and st.session_state.last_audio_improvement_analysis:
+        audio_improvement_context = ct.SYSTEM_TEMPLATE_AUDIO_IMPROVEMENT_INTEGRATION.format(
+            audio_improvement_analysis=st.session_state.last_audio_improvement_analysis
+        )
 
     enhanced_template = f"""{selected_template}
 
-【重要な追加機能】
-- ユーザーの直前の入力に改善点があれば、自然に会話に織り込んでアドバイスしてください
-- 改善点は会話の流れの中で自然に言及し、励ましの言葉と一緒に伝えてください
-- ユーザーのレベルに応じた適切なアドバイスを心がけてください
-- アドバイスは簡潔で実用的なものにしてください{improvement_context}"""
+{ct.SYSTEM_TEMPLATE_CONVERSATION_IMPROVEMENT_INTEGRATION}{improvement_context}{audio_improvement_context}"""
 
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content=enhanced_template),
@@ -591,6 +593,97 @@ def analyze_user_input_improvements(user_input, english_level="初級者"):
     except Exception as e:
         print(f"改善点分析エラー: {e}")
         return ""
+
+# 【課題】 回答精度を上げるためのアイデア  ユーザー入力の音声に対して、改善点を分析する
+def analyze_user_audio_improvements(audio_file_path, user_input_text, english_level="初級者"):
+    """
+    ユーザー音声の改善点を分析する（日常英会話モード用）
+    Args:
+        audio_file_path: ユーザー音声ファイルのパス
+        user_input_text: ユーザー入力の文字起こしテキスト
+        english_level: 英語レベル
+    Returns:
+        str: 音声改善点の分析結果
+    """
+    if not audio_file_path or not os.path.exists(audio_file_path):
+        return ""
+    
+    # 音声分析を実行（発音の詳細分析）
+    audio_analysis_result = analyze_pronunciation_detailed(audio_file_path, user_input_text)
+    
+    # 英語レベルに応じた音声改善点分析プロンプトを定数から取得
+    prompt = ct.SYSTEM_TEMPLATE_USER_AUDIO_IMPROVEMENT_ANALYSIS.get(english_level, ct.SYSTEM_TEMPLATE_USER_AUDIO_IMPROVEMENT_ANALYSIS["初級者"])
+    analysis_prompt = prompt.format(
+        user_input=user_input_text,
+        audio_analysis=audio_analysis_result
+    )
+    
+    try:
+        response = st.session_state.llm.invoke([
+            SystemMessage(content=analysis_prompt)
+        ])
+        return response.content.strip()
+    except Exception as e:
+        print(f"音声改善点分析エラー: {e}")
+        return ""
+
+def analyze_pronunciation_detailed(audio_file_path, text):
+    """
+    音声の発音詳細分析（日常英会話用）
+    Args:
+        audio_file_path: 音声ファイルのパス
+        text: 対応するテキスト
+    Returns:
+        str: 発音分析結果
+    """
+    try:
+        import librosa
+        import numpy as np
+        
+        # 音声ファイルの読み込み
+        audio, sr = librosa.load(audio_file_path, sr=16000)
+        
+        # 基本的な音声特徴量を分析
+        # 1. 音量レベル
+        rms_energy = np.mean(librosa.feature.rms(y=audio)[0])
+        
+        # 2. 話速（音声の長さとテキストの単語数から推定）
+        word_count = len(text.split())
+        duration = len(audio) / sr
+        speaking_rate = word_count / duration if duration > 0 else 0
+        
+        # 3. 音の明瞭度（スペクトラル重心）
+        spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=audio, sr=sr)[0])
+        
+        # 4. 無音部分の割合
+        frame_length = 2048
+        hop_length = 512
+        frames = librosa.util.frame(audio, frame_length=frame_length, hop_length=hop_length)
+        energy = np.mean(frames**2, axis=0)
+        silence_threshold = np.percentile(energy, 20)
+        silence_ratio = np.sum(energy < silence_threshold) / len(energy)
+        
+        # 5. 音声の安定性（音量の変動）
+        volume_stability = 1.0 - np.std(librosa.feature.rms(y=audio)[0])
+        
+        # 分析結果をテキストで返す
+        analysis_result = f"""
+【音声分析結果】
+- 音量レベル: {'適切' if 0.01 < rms_energy < 0.5 else '調整が必要'}
+- 話速: {speaking_rate:.1f}語/秒 ({'適切' if 1.5 < speaking_rate < 3.5 else '調整が必要'})
+- 音の明瞭度: {'良好' if spectral_centroid > 1000 else '改善の余地あり'}
+- 無音部分: {silence_ratio*100:.1f}% ({'適切' if silence_ratio < 0.3 else '多い'})
+- 音量安定性: {'良好' if volume_stability > 0.7 else '改善が必要'}
+"""
+        
+        return analysis_result
+        
+    except ImportError:
+        return "音声分析ライブラリが利用できません。"
+    except Exception as e:
+        return f"音声分析中にエラーが発生しました: {str(e)}"
+
+
 
 # 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
 #  会話履歴を考慮したチェーン作成

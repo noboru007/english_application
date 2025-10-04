@@ -291,8 +291,11 @@ if st.session_state.start_flg:
             st.markdown(audio_input_text)
 
         with st.spinner("回答の音声読み上げ準備中..."):
-            # ユーザー入力の改善点を分析（バックグラウンドで実行）
+            # ユーザー入力のテキスト改善点を分析（バックグラウンドで実行）
             improvement_analysis = ft.analyze_user_input_improvements(audio_input_text, st.session_state.englv)
+            
+            # ユーザー音声の改善点を分析（バックグラウンドで実行）
+            audio_improvement_analysis = ft.analyze_user_audio_improvements(audio_input_file_path, audio_input_text, st.session_state.englv)
             
             # ユーザー入力値をLLMに渡して回答取得
             llm_response = st.session_state.chain_basic_conversation.predict(input=audio_input_text)
@@ -318,6 +321,9 @@ if st.session_state.start_flg:
         # 改善点分析結果をセッション状態に保存（次の会話で活用）
         if improvement_analysis:
             st.session_state.last_improvement_analysis = improvement_analysis
+        
+        if audio_improvement_analysis:
+            st.session_state.last_audio_improvement_analysis = audio_improvement_analysis
         
         # ユーザー入力値とLLMからの回答をメッセージ一覧に追加
         st.session_state.messages.append({"role": "user", "content": audio_input_text})
