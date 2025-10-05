@@ -1,3 +1,160 @@
+def process_basic_conversation_mode():
+    """日常英会話モードの処理"""
+    audio_input_file_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    record_audio(audio_input_file_path)
+    
+    with st.spinner('音声入力をテキストに変換中...'):
+        transcript = transcribe_audio(audio_input_file_path)
+        audio_input_text = transcript.text
+    
+    with st.chat_message("user", avatar=const.USER_ICON_PATH):
+        st.markdown(audio_input_text)
+    
+    with st.spinner("回答の音声読み上げ準備中..."):
+        improvement_analysis = analyze_user_input_improvements(audio_input_text, st.session_state.english_level)
+        audio_improvement_analysis = analyze_user_audio_improvements(audio_input_file_path, audio_input_text, st.session_state.english_level)
+        
+        # 新しいAPIでチェーンを呼び出し
+        response = st.session_state.chain_basic_conversation.invoke(
+            {"input": audio_input_text},
+            config={"configurable": {"session_id": "conversation_session"}}
+        )
+        
+        # レスポンスから内容を取得
+        if hasattr(response, 'content'):
+            llm_response = response.content
+        else:
+            llm_response = str(response)
+        
+        llm_response_audio = st.session_state.openai_client.audio.speech.create(
+            model="tts-1",
+            voice=st.session_state.voice,
+            input=llm_response
+        )
+        
+        audio_output_file_path = f"{const.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
+        save_to_wav(llm_response_audio.content, audio_output_file_path)
+    
+    play_wav(audio_output_file_path, speed=st.session_state.speed)
+    
+    with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
+        st.markdown(llm_response)
+    
+    if improvement_analysis:
+        st.session_state.last_improvement_analysis = improvement_analysis
+    if audio_improvement_analysis:
+        st.session_state.last_audio_improvement_analysis = audio_improvement_analysis
+    
+    st.session_state.messages.append({"role": "user", "content": audio_input_text})
+    st.session_state.messages.append({"role": "assistant", "content": llm_response})
+
+def process_shadowing_mode():
+    """シャドーイングモードの処理"""
+    should_process = (st.session_state.shadowing_button_flag or 
+                      st.session_state.shadowing_count == 0 or 
+                      st.session_state.shadowing_audio_input_flag)
+    
+    if not should_process:
+        return False
+    
+    if not st.session_state.shadowing_audio_input_flag:
+        with st.spinner('AI文章生成中...'):
+            st.session_state.ai_sentence, st.session_state.reference_audio_path = create_problem_and_play_audio(st.session_state.english_level, "shadowing")
+    
+    st.session_state.shadowing_audio_input_flag = True
+    user_audio_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    record_audio(user_audio_path)
+    st.session_state.shadowing_audio_input_flag = False
+    
+    with st.spinner('音声品質向上処理中...'):
+        enhance_audio_quality(user_audio_path)
+    
+    with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
+        st.markdown(f"**AI文章:** {st.session_state.ai_sentence}")
+    with st.chat_message("user", avatar=const.USER_ICON_PATH):
+        st.markdown("**あなたの音声:** 録音完了")
+    
+    st.session_state.messages.append({"role": "assistant", "content": st.session_state.ai_sentence})
+    st.session_state.messages.append({"role": "user", "content": "音声録音完了"})
+    
+    with st.spinner('音声比較と評価結果の生成中...'):
+        evaluation = create_audio_based_evaluation(
+            st.session_state.ai_sentence,
+            st.session_state.reference_audio_path,
+            user_audio_path,
+            st.session_state.english_level
+        )
+    
+    with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
+        st.markdown(evaluation)
+    st.session_state.messages.append({"role": "assistant", "content": evaluation})
+    st.session_state.messages.append({"role": "other"})
+    
+    cleanup_audio_files(
+        user_audio_path,
+        st.session_state.reference_audio_path if hasattr(st.session_state, 'reference_audio_path') else None
+    )
+    
+    st.session_state.shadowing_flag = True
+    st.session_state.shadowing_count += 1
+    return True
+
+def process_dictation_mode():
+    """ディクテーションモードの処理"""
+    should_process = (st.session_state.dictation_button_flag or 
+                      st.session_state.dictation_count == 0 or 
+                      st.session_state.dictation_user_input)
+    
+    if not should_process:
+        return False
+    
+    # AI文章生成フェーズ
+    if not st.session_state.chat_open_flag:
+        with st.spinner('AI文章生成中...'):
+            st.session_state.ai_sentence, ai_audio_path = create_problem_and_play_audio(st.session_state.english_level, "dictation")
+        
+        st.session_state.chat_open_flag = True
+        st.session_state.dictation_flag = False
+        return True
+    
+    # 評価フェーズ
+    else:
+        if not st.session_state.dictation_user_input:
+            return False
+        
+        with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
+            st.markdown(f"**AI文章:** {st.session_state.ai_sentence}")
+        with st.chat_message("user", avatar=const.USER_ICON_PATH):
+            st.markdown(f"**あなたの回答:** {st.session_state.dictation_user_input}")
+        
+        st.session_state.messages.append({"role": "assistant", "content": st.session_state.ai_sentence})
+        st.session_state.messages.append({"role": "user", "content": st.session_state.dictation_user_input})
+        
+        with st.spinner('評価結果の生成中...'):
+            if st.session_state.english_level in const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL:
+                system_template = const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL[st.session_state.english_level].format(
+                    llm_text=st.session_state.ai_sentence,
+                    user_text=st.session_state.dictation_user_input
+                )
+            else:
+                system_template = const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL["初級者"].format(
+                    llm_text=st.session_state.ai_sentence,
+                    user_text=st.session_state.dictation_user_input
+                )
+            st.session_state.chain_evaluation = create_chain(system_template)
+            evaluation = create_evaluation(st.session_state.english_level)
+        
+        with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
+            st.markdown(evaluation)
+        st.session_state.messages.append({"role": "assistant", "content": evaluation})
+        st.session_state.messages.append({"role": "other"})
+        
+        st.session_state.dictation_flag = True
+        st.session_state.dictation_user_input = ""
+        st.session_state.dictation_count += 1
+        st.session_state.chat_open_flag = False
+        return True
+
 import streamlit as st
 import os
 import time
@@ -10,14 +167,111 @@ import numpy as np
 from scipy.io.wavfile import write
 from langchain.prompts import (
     ChatPromptTemplate,
-    HumanMessagePromptTemplate,
     MessagesPlaceholder,
 )
 from langchain.schema import SystemMessage
-from langchain.memory import ConversationSummaryBufferMemory
 from langchain_openai import ChatOpenAI
-from langchain.chains import ConversationChain
-import constants as ct
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import StreamlitChatMessageHistory
+from openai import OpenAI
+import constants as const
+
+# ================== 初期化関連 ==================
+
+def initialize_session_state():
+    """セッション状態の初期化"""
+    if "messages" in st.session_state:
+        return
+    
+    # 全フラグを一括初期化
+    initial_state = {
+        # 基本フラグ
+        "start_flag": False,
+        "previous_mode": "",
+        "chat_open_flag": False,
+        "ai_sentence": "",  # AIが生成した文章
+        # シャドーイング関連
+        "shadowing_flag": False,
+        "shadowing_button_flag": False,
+        "shadowing_count": 0,
+        "shadowing_first_flag": True,
+        "shadowing_audio_input_flag": False,
+        "shadowing_evaluation_first_flag": True,
+        # ディクテーション関連
+        "dictation_flag": False,
+        "dictation_button_flag": False,
+        "dictation_count": 0,
+        "dictation_first_flag": True,
+        "dictation_user_input": "",  # ユーザーの入力
+        "dictation_evaluation_first_flag": True,
+    }
+    
+    for key, value in initial_state.items():
+        st.session_state[key] = value
+    
+    # 音声設定の初期化
+    voice_settings = const.VOICE_SETTINGS["初級者"]
+    st.session_state.voice = voice_settings["voice"]
+    st.session_state.speed = voice_settings["speed"]
+    
+    # OpenAI初期化
+    try:
+        st.session_state.openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        st.session_state.llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.5)
+    except Exception as e:
+        st.error(f"OpenAI初期化エラー: {str(e)}")
+        st.stop()
+    
+    # メッセージ・チャット履歴の初期化
+    st.session_state.mode_messages = {const.MODE_1: []}
+    st.session_state.messages = st.session_state.mode_messages[const.MODE_1]
+    st.session_state.chat_history = StreamlitChatMessageHistory(key="chat_messages")
+    
+    # チェーン作成
+    st.session_state.chain_basic_conversation = create_chain(english_level="初級者")
+
+def handle_mode_change():
+    """モード変更時の処理"""
+    if st.session_state.mode == st.session_state.previous_mode:
+        return
+    
+    # 共通の初期化
+    st.session_state.start_flag = False
+    st.session_state.chat_open_flag = False
+    st.session_state.shadowing_count = 0
+    st.session_state.dictation_count = 0
+    
+    # モード別の初期化
+    mode_flags = {
+        const.MODE_1: {"dictation_flag": False, "shadowing_flag": False},
+        const.MODE_2: {"dictation_flag": False},
+        const.MODE_3: {"shadowing_flag": False}
+    }
+    
+    for key, value in mode_flags.get(st.session_state.mode, {}).items():
+        st.session_state[key] = value
+    
+    st.session_state.previous_mode = st.session_state.mode
+
+def handle_english_level_change():
+    """英語レベル変更時の処理"""
+    if "previous_english_level" not in st.session_state:
+        st.session_state.previous_english_level = st.session_state.english_level
+        return False
+    
+    if st.session_state.english_level != st.session_state.previous_english_level:
+        st.session_state.chain_basic_conversation = create_chain(english_level=st.session_state.english_level)
+        
+        voice_settings = const.VOICE_SETTINGS[st.session_state.english_level]
+        st.session_state.voice = voice_settings["voice"]
+        st.session_state.speed = voice_settings["speed"]
+        
+        st.session_state.previous_english_level = st.session_state.english_level
+        return True
+    
+    return False
+
+# ================== 音声処理関連 ==================
 
 def record_audio(audio_input_file_path):
     """
@@ -25,18 +279,20 @@ def record_audio(audio_input_file_path):
     Args:
         audio_input_file_path: 音声ファイルの保存パス
     """
+    try:
+        audio = audiorecorder(
+            start_prompt="発話開始",
+            pause_prompt="やり直す",
+            stop_prompt="発話終了"
+        )
 
-    # シンプルなaudiorecorderの使用（再試行なし）
-    audio = audiorecorder(
-        start_prompt="発話開始",
-        pause_prompt="やり直す",
-        stop_prompt="発話終了"
-    )
-
-    if len(audio) > 0:
-        # シンプルな音声エクスポート
-        audio.export(audio_input_file_path, format="wav")
-    else:
+        if len(audio) > 0:
+            audio.export(audio_input_file_path, format="wav")
+        else:
+            st.stop()
+    except Exception as e:
+        print(f"音声録音エラー: {e}")
+        st.error("音声録音に失敗しました。テキスト入力でお試しください。")
         st.stop()
 
 def transcribe_audio(audio_input_file_path, enhance_quality=True):
@@ -46,17 +302,13 @@ def transcribe_audio(audio_input_file_path, enhance_quality=True):
         audio_input_file_path: 音声入力ファイルのパス
         enhance_quality: 音声品質向上処理を行うかどうか
     """
-    # ファイルの存在確認
     if not os.path.exists(audio_input_file_path):
         return None
     
-    # ファイルサイズの確認
     file_size = os.path.getsize(audio_input_file_path)
-    
     if file_size == 0:
         return None
 
-    # 音声品質向上処理（オプション）
     if enhance_quality:
         try:
             enhanced_audio_path = enhance_audio_quality(audio_input_file_path)
@@ -65,7 +317,7 @@ def transcribe_audio(audio_input_file_path, enhance_quality=True):
 
     try:
         with open(audio_input_file_path, 'rb') as audio_input_file:
-            transcript = st.session_state.openai_obj.audio.transcriptions.create(
+            transcript = st.session_state.openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_input_file,
                 language="en"
@@ -73,122 +325,162 @@ def transcribe_audio(audio_input_file_path, enhance_quality=True):
     except Exception as e:
         return None
     
-    # 音声入力ファイルを削除
     os.remove(audio_input_file_path)
-
     return transcript
 
 def save_to_wav(llm_response_audio, audio_output_file_path):
     """
-    一旦mp3形式で音声ファイル作成後、wav形式に変換
+    mp3からwav形式に変換して保存
     Args:
         llm_response_audio: LLMからの回答の音声データ
         audio_output_file_path: 出力先のファイルパス
     """
-
-    temp_audio_output_filename = f"{ct.AUDIO_OUTPUT_DIR}/temp_audio_output_{int(time.time())}.mp3"
-    with open(temp_audio_output_filename, "wb") as temp_audio_output_file:
-        temp_audio_output_file.write(llm_response_audio)
+    temp_audio_path = f"{const.AUDIO_OUTPUT_DIR}/temp_audio_output_{int(time.time())}.mp3"
     
-    audio_mp3 = AudioSegment.from_file(temp_audio_output_filename, format="mp3")
-    audio_mp3.export(audio_output_file_path, format="wav")
-
-    # 音声出力用に一時的に作ったmp3ファイルを削除
-    os.remove(temp_audio_output_filename)
+    try:
+        with open(temp_audio_path, "wb") as f:
+            f.write(llm_response_audio)
+        
+        audio_mp3 = AudioSegment.from_file(temp_audio_path, format="mp3")
+        audio_mp3.export(audio_output_file_path, format="wav")
+    finally:
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
 
 def play_wav(audio_output_file_path, speed=1.0):
     """
     音声ファイルの読み上げ
     Args:
         audio_output_file_path: 音声ファイルのパス
-        speed: 再生速度（1.0が通常速度、0.5で半分の速さ、2.0で倍速など）
+        speed: 再生速度
     """
-    # 音声ファイルの読み込み
-    audio = AudioSegment.from_wav(audio_output_file_path)
-    
-    # 速度を変更
-    if speed != 1.0:
-        # frame_rateを変更することで速度を調整
-        modified_audio = audio._spawn(
-            audio.raw_data, 
-            overrides={"frame_rate": int(audio.frame_rate * speed)}
-        )
-        # 速度変更された音声を一時ファイルに保存
-        temp_audio_path = audio_output_file_path.replace('.wav', '_temp.wav')
-        modified_audio.export(temp_audio_path, format="wav")
+    try:
+        audio = AudioSegment.from_wav(audio_output_file_path)
+        
+        # 速度変更
+        if speed != 1.0:
+            modified_audio = audio._spawn(
+                audio.raw_data, 
+                overrides={"frame_rate": int(audio.frame_rate * speed)}
+            )
+            temp_audio_path = audio_output_file_path.replace('.wav', '_temp.wav')
+            modified_audio.export(temp_audio_path, format="wav")
+            
+            import shutil
+            shutil.move(temp_audio_path, audio_output_file_path)
 
-        # 一時ファイルを元のファイルに置き換え
-        import shutil
-        shutil.move(temp_audio_path, audio_output_file_path)
+        # PyAudioで再生
+        with wave.open(audio_output_file_path, 'rb') as wf:
+            p = pyaudio.PyAudio()
+            stream = p.open(
+                format=p.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True
+            )
 
-    # PyAudioで再生
-    with wave.open(audio_output_file_path, 'rb') as play_target_file:
-        p = pyaudio.PyAudio()
-        stream = p.open(
-            format=p.get_format_from_width(play_target_file.getsampwidth()),
-            channels=play_target_file.getnchannels(),
-            rate=play_target_file.getframerate(),
-            output=True
-        )
+            chunk = 1024
+            data = wf.readframes(chunk)
+            while data:
+                stream.write(data)
+                data = wf.readframes(chunk)
 
-        data = play_target_file.readframes(1024)
-        while data:
-            stream.write(data)
-            data = play_target_file.readframes(1024)
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+        
+    except (OSError, Exception) as e:
+        print(f"音声再生エラーをスキップしました: {e}")
+        pass
 
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-    
-    # 音声ファイルは比較用に保持（削除しない）
-    # os.remove(audio_output_file_path)
+def cleanup_audio_files(*audio_paths):
+    """
+    音声ファイルのクリーンアップ
+    Args:
+        *audio_paths: 削除する音声ファイルのパス（可変長引数）
+    """
+    for audio_path in audio_paths:
+        try:
+            if audio_path and os.path.exists(audio_path):
+                os.remove(audio_path)
+        except Exception as e:
+            pass
+
+def enhance_audio_quality(audio_file_path):
+    """音声品質を向上させる前処理"""
+    try:
+        import librosa
+        import soundfile as sf
+        
+        settings = const.AUDIO_ENHANCEMENT_SETTINGS
+        
+        audio, sample_rate = librosa.load(audio_file_path, sr=settings["target_sample_rate"])
+        audio = librosa.effects.preemphasis(audio, coef=settings["preemphasis_coeff"])
+        audio = librosa.util.normalize(audio, norm=np.inf) * settings["normalization_level"]
+        audio, _ = librosa.effects.trim(audio, top_db=settings["trim_threshold"])
+        
+        sf.write(audio_file_path, audio, sample_rate)
+        return audio_file_path
+    except (ImportError, Exception):
+        return audio_file_path
+
+# ================== LLM処理関連 ==================
 
 def create_chain(system_template=None, english_level=None):
     """
-    LLMによる回答生成用のChain作成
+    LLMによる回答生成用のChain作成（最新のLangChain API使用）
     """
-    
-    # 【課題】 回答精度を上げるために、英語レベルに応じたプロンプトを選択
-    if english_level and english_level in ct.SYSTEM_TEMPLATE_BASIC_CONVERSATION:
-        selected_template = ct.SYSTEM_TEMPLATE_BASIC_CONVERSATION[english_level]
-    elif system_template:
-        selected_template = system_template
-    else:
-        # デフォルトは初級者レベル
-        selected_template = ct.SYSTEM_TEMPLATE_BASIC_CONVERSATION["初級者"]
-
-    # 改善点アドバイス機能を追加したプロンプト
-    improvement_context = ""
-    audio_improvement_context = ""
-    
-    # テキスト改善点分析結果
-    if hasattr(st.session_state, 'last_improvement_analysis') and st.session_state.last_improvement_analysis:
-        improvement_context = ct.SYSTEM_TEMPLATE_TEXT_IMPROVEMENT_INTEGRATION.format(
-            text_improvement_analysis=st.session_state.last_improvement_analysis
-        )
-    
-    # 音声改善点分析結果
-    if hasattr(st.session_state, 'last_audio_improvement_analysis') and st.session_state.last_audio_improvement_analysis:
-        audio_improvement_context = ct.SYSTEM_TEMPLATE_AUDIO_IMPROVEMENT_INTEGRATION.format(
-            audio_improvement_analysis=st.session_state.last_audio_improvement_analysis
-        )
-
-    enhanced_template = f"""{selected_template}
-
-{ct.SYSTEM_TEMPLATE_CONVERSATION_IMPROVEMENT_INTEGRATION}{improvement_context}{audio_improvement_context}"""
-
-    prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content=enhanced_template),
-        MessagesPlaceholder(variable_name="history"),
-        HumanMessagePromptTemplate.from_template("{input}")
-    ])
-    chain = ConversationChain(
-        llm=st.session_state.llm,
-        memory=st.session_state.memory,
-        prompt=prompt
+    # テンプレート選択
+    selected_template = (
+        const.SYSTEM_TEMPLATE_BASIC_CONVERSATION.get(english_level) or
+        system_template or
+        const.SYSTEM_TEMPLATE_BASIC_CONVERSATION["初級者"]
     )
 
-    return chain
+    # コンテキスト構築
+    contexts = []
+    if hasattr(st.session_state, 'last_improvement_analysis') and st.session_state.last_improvement_analysis:
+        contexts.append(const.SYSTEM_TEMPLATE_TEXT_IMPROVEMENT_INTEGRATION.format(
+            text_improvement_analysis=st.session_state.last_improvement_analysis
+        ))
+    
+    if hasattr(st.session_state, 'last_audio_improvement_analysis') and st.session_state.last_audio_improvement_analysis:
+        contexts.append(const.SYSTEM_TEMPLATE_AUDIO_IMPROVEMENT_INTEGRATION.format(
+            audio_improvement_analysis=st.session_state.last_audio_improvement_analysis
+        ))
+
+    enhanced_template = f"{selected_template}\n\n{const.SYSTEM_TEMPLATE_CONVERSATION_IMPROVEMENT_INTEGRATION}{''.join(contexts)}"
+
+    # チェーン構築
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", enhanced_template),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}")
+    ])
+    
+    chain = prompt | st.session_state.llm
+    
+    return RunnableWithMessageHistory(
+        chain,
+        lambda session_id: st.session_state.chat_history,
+        input_messages_key="input",
+        history_messages_key="chat_history",
+    )
+
+def create_evaluation(english_level="初級者"):
+    """
+    ユーザー入力値の評価生成
+    Args:
+        english_level: 英語レベル
+    """
+    response = st.session_state.chain_evaluation.invoke(
+        {"input": "上記の情報を基に、詳細な評価を提供してください。"},
+        config={"configurable": {"session_id": "evaluation_session"}}
+    )
+    
+    return response.content if hasattr(response, 'content') else str(response)
+
+# ================== 問題生成・評価関連 ==================
 
 def extract_vocabulary_from_sentence(sentence):
     """
@@ -199,21 +491,14 @@ def extract_vocabulary_from_sentence(sentence):
         list: 抽出された単語のリスト
     """
     import re
-    
-    # 基本的な単語抽出（アルファベットのみ、2文字以上）
     words = re.findall(r'\b[a-zA-Z]{2,}\b', sentence.lower())
-    
-    # 一般的なストップワードを除外
     stop_words = {
         'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
         'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
         'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those',
         'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'
     }
-    
-    # ストップワードを除外
     vocabulary = [word for word in words if word not in stop_words]
-    
     return vocabulary
 
 def update_vocabulary_history(mode, vocabulary_list):
@@ -226,10 +511,8 @@ def update_vocabulary_history(mode, vocabulary_list):
     if f'{mode}_vocabulary_history' not in st.session_state:
         st.session_state[f'{mode}_vocabulary_history'] = []
     
-    # 新しいvocabularyを履歴に追加
     st.session_state[f'{mode}_vocabulary_history'].append(vocabulary_list)
     
-    # 3世代以上前の履歴を削除（最新3世代のみ保持）
     if len(st.session_state[f'{mode}_vocabulary_history']) > 3:
         st.session_state[f'{mode}_vocabulary_history'] = st.session_state[f'{mode}_vocabulary_history'][-3:]
 
@@ -250,64 +533,33 @@ def get_avoid_vocabulary(mode):
     
     return avoid_vocab
 
-def get_vocabulary_history_status(mode):
-    """
-    vocabulary履歴の状態を取得（デバッグ用）
-    Args:
-        mode: "dictation" または "shadowing"
-    Returns:
-        dict: 履歴の状態情報
-    """
-    if f'{mode}_vocabulary_history' not in st.session_state:
-        return {
-            "total_generations": 0,
-            "current_avoid_count": 0,
-            "avoid_vocabulary": []
-        }
-    
-    history = st.session_state[f'{mode}_vocabulary_history']
-    avoid_vocab = get_avoid_vocabulary(mode)
-    
-    return {
-        "total_generations": len(history),
-        "current_avoid_count": len(avoid_vocab),
-        "avoid_vocabulary": sorted(list(avoid_vocab)),
-        "recent_vocabulary": [vocab for vocab_list in history[-1:] for vocab in vocab_list] if history else []
-    }
-
 def create_problem_and_play_audio(english_level="初級者", mode="shadowing"):
     """
-    問題生成と音声ファイルの再生
+    AI文章生成と音声ファイルの再生
     Args:
-        english_level: 英語レベル（"キッズ", "初級者", "中級者", "上級者"）
+        english_level: 英語レベル
         mode: "dictation" または "shadowing"
+    Returns:
+        tuple: (AIが生成した文章, 音声ファイルパス)
     """
-
-    # ランダムな問題を生成するために、毎回異なるプロンプトを作成
     import random
-    import time
     
-    # より多様なランダム化のための複数の要素を組み合わせ
-    random_seed = random.randint(1, 10000)
-    timestamp = int(time.time())
+    # プロンプト選択
+    base_prompt = const.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL.get(
+        english_level,
+        const.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL["初級者"]
+    )
     
-    # 英語レベルに応じたプロンプトを選択
-    if english_level in ct.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL:
-        base_prompt = ct.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL[english_level]
-    else:
-        # デフォルトは初級者レベル
-        base_prompt = ct.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL["初級者"]
-    
-    # 避けるべきvocabularyを取得
+    # 避けるべき語彙を取得
     avoid_vocab = get_avoid_vocabulary(mode)
     avoid_vocab_str = ", ".join(sorted(avoid_vocab)) if avoid_vocab else "None"
     
-    # ランダム化パラメータを追加
+    # ランダム化プロンプト構築
     random_prompt = f"""{base_prompt}
 
 RANDOMIZATION PARAMETERS:
-- Random seed: {random_seed}
-- Timestamp: {timestamp}
+- Random seed: {random.randint(1, 10000)}
+- Timestamp: {int(time.time())}
 - English Level: {english_level}
 
 VOCABULARY AVOIDANCE:
@@ -316,97 +568,32 @@ VOCABULARY AVOIDANCE:
 
 Generate a completely unique sentence appropriate for {english_level} level learners."""
     
-    # 問題文生成用のプロンプトを直接LLMに送信（会話履歴を使わない）
-    response = st.session_state.llm.invoke([
-        SystemMessage(content=random_prompt)
-    ])
-    problem = response.content
+    # AI文章生成
+    response = st.session_state.llm.invoke([SystemMessage(content=random_prompt)])
+    ai_sentence = response.content
 
-    # 生成された問題文からvocabularyを抽出して履歴に追加
-    problem_vocabulary = extract_vocabulary_from_sentence(problem)
-    update_vocabulary_history(mode, problem_vocabulary)
+    # 語彙履歴を更新
+    sentence_vocabulary = extract_vocabulary_from_sentence(ai_sentence)
+    update_vocabulary_history(mode, sentence_vocabulary)
 
-    # LLMからの回答を音声データに変換
-    llm_response_audio = st.session_state.openai_obj.audio.speech.create(
+    # 音声生成と保存
+    ai_audio = st.session_state.openai_client.audio.speech.create(
         model="tts-1",
         voice=st.session_state.voice,
-        input=problem
+        input=ai_sentence
     )
 
-    # 音声ファイルの作成（比較用に保存）
-    audio_output_file_path = f"{ct.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
-    save_to_wav(llm_response_audio.content, audio_output_file_path)
+    audio_output_path = f"{const.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
+    save_to_wav(ai_audio.content, audio_output_path)
+    play_wav(audio_output_path, st.session_state.speed)
 
-    # 音声ファイルの読み上げ
-    play_wav(audio_output_file_path, st.session_state.speed)
-
-    return problem, audio_output_file_path
-
-def create_evaluation(english_level="初級者"):
-    """
-    ユーザー入力値の評価生成
-    Args:
-        english_level: 英語レベル（"キッズ", "初級者", "中級者", "上級者"）
-    """
-    # 評価用のプロンプトを明示的に渡す
-    evaluation_prompt = "上記の情報を基に、詳細な評価を提供してください。"
-    llm_response_evaluation = st.session_state.chain_evaluation.predict(input=evaluation_prompt)
-    return llm_response_evaluation
-
-def create_audio_based_evaluation(problem_text, reference_audio_path, user_audio_path, english_level="初級者"):
-    """
-    音声比較を基にした評価生成（文字起こし不要）
-    Args:
-        problem_text: 問題文
-        reference_audio_path: 参考音声（LLM生成）のパス
-        user_audio_path: ユーザー音声のパス
-        english_level: 英語レベル（"キッズ", "初級者", "中級者", "上級者"）
-    Returns:
-        str: 評価結果
-    """
-    
-    # 音声比較を実行
-    audio_comparison_result = compare_audio_files(reference_audio_path, user_audio_path)
-    
-    # 音声比較結果を基に評価プロンプトを作成
-    if audio_comparison_result:
-        audio_analysis = ct.AUDIO_ANALYSIS_TEMPLATE.format(
-            mfcc_similarity_percent=100*audio_comparison_result['mfcc_similarity'],
-            spectral_similarity_percent=100*audio_comparison_result['spectral_similarity'],
-            zcr_similarity_percent=100*audio_comparison_result['zcr_similarity'],
-            energy_similarity_percent=100*audio_comparison_result['energy_similarity'],
-            overall_score=audio_comparison_result['overall_score'],
-            reference_duration=audio_comparison_result['reference_duration'],
-            user_duration=audio_comparison_result['user_duration']
-        )
-    else:
-        audio_analysis = ct.AUDIO_ANALYSIS_ERROR_MESSAGE
-    
-    # 英語レベルに応じた評価プロンプトを選択
-    if english_level in ct.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL:
-        system_template = ct.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL[english_level].format(
-            problem_text=problem_text,
-            audio_analysis=audio_analysis
-        )
-    else:
-        # デフォルトは初級者レベル
-        system_template = ct.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL["初級者"].format(
-            problem_text=problem_text,
-            audio_analysis=audio_analysis
-        )
-
-    st.session_state.chain_evaluation = create_chain(system_template)
-    
-    # 評価結果を生成
-    llm_response_evaluation = create_evaluation(english_level)
-
-    return llm_response_evaluation
+    return ai_sentence, audio_output_path
 
 def compare_audio_files(reference_audio_path, user_audio_path):
     """
     音声ファイル同士を比較して発音の類似度を分析
     Args:
-        reference_audio_path: 参考音声（LLM生成）のパス
+        reference_audio_path: 参考音声のパス
         user_audio_path: ユーザー音声のパス
     Returns:
         dict: 音声比較結果
@@ -416,60 +603,46 @@ def compare_audio_files(reference_audio_path, user_audio_path):
         import numpy as np
         from scipy.spatial.distance import cosine
         
-        # 音声ファイルの読み込み
         ref_audio, ref_sr = librosa.load(reference_audio_path, sr=16000)
         user_audio, user_sr = librosa.load(user_audio_path, sr=16000)
         
-        # 1. 音声の長さを正規化（短い方に合わせる）
         min_length = min(len(ref_audio), len(user_audio))
         ref_audio = ref_audio[:min_length]
         user_audio = user_audio[:min_length]
         
-        # 2. MFCC特徴量の抽出
         ref_mfcc = librosa.feature.mfcc(y=ref_audio, sr=ref_sr, n_mfcc=13)
         user_mfcc = librosa.feature.mfcc(y=user_audio, sr=user_sr, n_mfcc=13)
         
-        # 3. 特徴量の平均を計算
         ref_mfcc_mean = np.mean(ref_mfcc, axis=1)
         user_mfcc_mean = np.mean(user_mfcc, axis=1)
         
-        # 4. コサイン類似度を計算
         similarity = 1 - cosine(ref_mfcc_mean, user_mfcc_mean)
         
-        # 5. スペクトラル重心の比較
         ref_spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=ref_audio, sr=ref_sr))
         user_spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=user_audio, sr=user_sr))
         
-        # 6. ゼロクロッシングレートの比較
         ref_zcr = np.mean(librosa.feature.zero_crossing_rate(ref_audio))
         user_zcr = np.mean(librosa.feature.zero_crossing_rate(user_audio))
         
-        # 7. 結果の計算
         spectral_similarity = 1 - abs(ref_spectral_centroid - user_spectral_centroid) / max(ref_spectral_centroid, user_spectral_centroid)
         zcr_similarity = 1 - abs(ref_zcr - user_zcr) / max(ref_zcr, user_zcr)
         
-        # 8. 単語レベルの分析（音声の区切りを検出）
-        # 音声のエネルギー変化を分析して単語の境界を推定
         ref_energy = librosa.feature.rms(y=ref_audio)[0]
         user_energy = librosa.feature.rms(y=user_audio)[0]
-        
-        # エネルギー変化の類似度を計算
         energy_similarity = 1 - cosine(ref_energy, user_energy)
         
-        # 9. 総合スコアの計算（単語レベル分析も含める）
         overall_score = (similarity * 0.5 + spectral_similarity * 0.2 + zcr_similarity * 0.2 + energy_similarity * 0.1) * 100
         
         result = {
-            "similarity": similarity,  # 問題文との一致度として使用
+            "similarity": similarity,
             "mfcc_similarity": similarity,
             "spectral_similarity": spectral_similarity,
             "zcr_similarity": zcr_similarity,
-            "energy_similarity": energy_similarity,  # 単語レベル分析
+            "energy_similarity": energy_similarity,
             "overall_score": overall_score,
             "reference_duration": len(ref_audio) / ref_sr,
             "user_duration": len(user_audio) / user_sr
         }
-        
         
         return result
         
@@ -478,97 +651,50 @@ def compare_audio_files(reference_audio_path, user_audio_path):
     except Exception as e:
         return None
 
-def cleanup_audio_files(*audio_paths):
+def create_audio_based_evaluation(ai_sentence, reference_audio_path, user_audio_path, english_level="初級者"):
     """
-    音声ファイルのクリーンアップ
+    音声比較を基にした評価生成
     Args:
-        *audio_paths: 削除する音声ファイルのパス（可変長引数）
+        ai_sentence: AIが生成した文章
+        reference_audio_path: 参考音声（AI生成）のパス
+        user_audio_path: ユーザー音声のパス
+        english_level: 英語レベル
+    Returns:
+        str: 評価結果
     """
-    for audio_path in audio_paths:
-        try:
-            if audio_path and os.path.exists(audio_path):
-                os.remove(audio_path)
-                pass
-        except Exception as e:
-            pass
-
-
-# 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
-#  音声前処理の改善
-def enhance_audio_quality(audio_file_path):
-    """音声品質を向上させる前処理"""
-    try:
-        import librosa
-        import soundfile as sf
-        import numpy as np
-        
-        # 設定を取得
-        settings = ct.AUDIO_ENHANCEMENT_SETTINGS
-        
-        # 音声を読み込み（設定されたサンプルレートにリサンプリング）
-        audio, sr = librosa.load(audio_file_path, sr=settings["target_sample_rate"])
-        
-        # 1. 前処理（高周波成分の強調）
-        audio_preemphasized = librosa.effects.preemphasis(audio, coef=settings["preemphasis_coeff"])
-        
-        # 2. 音量正規化（設定されたレベルに調整）
-        audio_normalized = librosa.util.normalize(audio_preemphasized, norm=np.inf)
-        audio_normalized = audio_normalized * settings["normalization_level"]
-        
-        # 3. 無音部分の除去（設定された閾値で短縮）
-        audio_trimmed, _ = librosa.effects.trim(audio_normalized, top_db=settings["trim_threshold"])
-        
-        # 4. 処理済み音声を保存
-        sf.write(audio_file_path, audio_trimmed, sr)
-        
-        return audio_file_path
-        
-    except ImportError as e:
-        return audio_file_path
-    except Exception as e:
-        return audio_file_path
-
-# 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
-#  複数の音声認識エンジンの使用
-def transcribe_audio_with_fallback(audio_file_path):
-    """複数の音声認識エンジンでフォールバック"""
-    try:
-        # メインの音声認識
-        transcript = st.session_state.openai_obj.audio.transcriptions.create(
-            model="whisper-1",
-            file=open(audio_file_path, 'rb'),
-            language="en",
-            response_format="verbose_json"
+    audio_comparison_result = compare_audio_files(reference_audio_path, user_audio_path)
+    
+    if audio_comparison_result:
+        audio_analysis = const.AUDIO_ANALYSIS_TEMPLATE.format(
+            mfcc_similarity_percent=100*audio_comparison_result['mfcc_similarity'],
+            spectral_similarity_percent=100*audio_comparison_result['spectral_similarity'],
+            zcr_similarity_percent=100*audio_comparison_result['zcr_similarity'],
+            energy_similarity_percent=100*audio_comparison_result['energy_similarity'],
+            overall_score=audio_comparison_result['overall_score'],
+            reference_duration=audio_comparison_result['reference_duration'],
+            user_duration=audio_comparison_result['user_duration']
         )
-        return transcript.text
-    except Exception as e:
-        # フォールバック処理
-        st.warning("音声認識でエラーが発生しました。再試行します。")
-        # 別の音声認識サービスや再試行ロジック
-        return retry_transcription(audio_file_path)
-
-def retry_transcription(audio_file_path):
-    """音声認識の再試行"""
-    # 実装例
-    return "音声認識に失敗しました"
-
-# 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
-#  ユーザーレベルと過去のパフォーマンスに基づく段階的評価
-def create_progressive_evaluation(user_level, performance_history):
-    """ユーザーレベルと過去のパフォーマンスに基づく段階的評価"""
+    else:
+        audio_analysis = const.AUDIO_ANALYSIS_ERROR_MESSAGE
     
-    if user_level == "キッズ":
-        focus_areas = ["やさしい単語", "簡単なフレーズ", "発音の基礎", "リスニング力"]
-    elif user_level == "初級者":
-        focus_areas = ["基本的な文法", "基本的な語彙", "発音の基礎"]
-    elif user_level == "中級者":
-        focus_areas = ["複雑な文法構造", "語彙の豊富さ", "自然な表現"]
-    else:  # 上級者
-        focus_areas = ["微妙なニュアンス", "文化的適切性", "高度な表現"]
-    
-    return focus_areas
+    if english_level in const.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL:
+        system_template = const.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL[english_level].format(
+            problem_text=ai_sentence,
+            audio_analysis=audio_analysis
+        )
+    else:
+        system_template = const.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL["初級者"].format(
+            problem_text=ai_sentence,
+            audio_analysis=audio_analysis
+        )
 
-# 【課題】 回答精度を上げるためのアイデア  ユーザーの直前の回答に対して、改善点を分析する
+    st.session_state.chain_evaluation = create_chain(system_template)
+    llm_response_evaluation = create_evaluation(english_level)
+
+    return llm_response_evaluation
+
+# ================== 改善点分析関連 ==================
+
 def analyze_user_input_improvements(user_input, english_level="初級者"):
     """
     ユーザー入力の改善点を分析する
@@ -581,8 +707,10 @@ def analyze_user_input_improvements(user_input, english_level="初級者"):
     if not user_input or len(user_input.strip()) < 3:
         return ""
     
-    # 英語レベルに応じた改善点分析プロンプトを定数から取得
-    prompt = ct.SYSTEM_TEMPLATE_USER_INPUT_IMPROVEMENT_ANALYSIS.get(english_level, ct.SYSTEM_TEMPLATE_USER_INPUT_IMPROVEMENT_ANALYSIS["初級者"])
+    prompt = const.SYSTEM_TEMPLATE_USER_INPUT_IMPROVEMENT_ANALYSIS.get(
+        english_level, 
+        const.SYSTEM_TEMPLATE_USER_INPUT_IMPROVEMENT_ANALYSIS["初級者"]
+    )
     analysis_prompt = prompt.format(user_input=user_input)
     
     try:
@@ -594,10 +722,9 @@ def analyze_user_input_improvements(user_input, english_level="初級者"):
         print(f"改善点分析エラー: {e}")
         return ""
 
-# 【課題】 回答精度を上げるためのアイデア  ユーザー入力の音声に対して、改善点を分析する
 def analyze_user_audio_improvements(audio_file_path, user_input_text, english_level="初級者"):
     """
-    ユーザー音声の改善点を分析する（日常英会話モード用）
+    ユーザー音声の改善点を分析する
     Args:
         audio_file_path: ユーザー音声ファイルのパス
         user_input_text: ユーザー入力の文字起こしテキスト
@@ -608,11 +735,12 @@ def analyze_user_audio_improvements(audio_file_path, user_input_text, english_le
     if not audio_file_path or not os.path.exists(audio_file_path):
         return ""
     
-    # 音声分析を実行（発音の詳細分析）
     audio_analysis_result = analyze_pronunciation_detailed(audio_file_path, user_input_text)
     
-    # 英語レベルに応じた音声改善点分析プロンプトを定数から取得
-    prompt = ct.SYSTEM_TEMPLATE_USER_AUDIO_IMPROVEMENT_ANALYSIS.get(english_level, ct.SYSTEM_TEMPLATE_USER_AUDIO_IMPROVEMENT_ANALYSIS["初級者"])
+    prompt = const.SYSTEM_TEMPLATE_USER_AUDIO_IMPROVEMENT_ANALYSIS.get(
+        english_level, 
+        const.SYSTEM_TEMPLATE_USER_AUDIO_IMPROVEMENT_ANALYSIS["初級者"]
+    )
     analysis_prompt = prompt.format(
         user_input=user_input_text,
         audio_analysis=audio_analysis_result
@@ -629,7 +757,7 @@ def analyze_user_audio_improvements(audio_file_path, user_input_text, english_le
 
 def analyze_pronunciation_detailed(audio_file_path, text):
     """
-    音声の発音詳細分析（日常英会話用）
+    音声の発音詳細分析
     Args:
         audio_file_path: 音声ファイルのパス
         text: 対応するテキスト
@@ -640,33 +768,22 @@ def analyze_pronunciation_detailed(audio_file_path, text):
         import librosa
         import numpy as np
         
-        # 音声ファイルの読み込み
         audio, sr = librosa.load(audio_file_path, sr=16000)
         
-        # 基本的な音声特徴量を分析
-        # 1. 音量レベル
         rms_energy = np.mean(librosa.feature.rms(y=audio)[0])
-        
-        # 2. 話速（音声の長さとテキストの単語数から推定）
         word_count = len(text.split())
         duration = len(audio) / sr
         speaking_rate = word_count / duration if duration > 0 else 0
-        
-        # 3. 音の明瞭度（スペクトラル重心）
         spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=audio, sr=sr)[0])
         
-        # 4. 無音部分の割合
         frame_length = 2048
         hop_length = 512
         frames = librosa.util.frame(audio, frame_length=frame_length, hop_length=hop_length)
         energy = np.mean(frames**2, axis=0)
         silence_threshold = np.percentile(energy, 20)
         silence_ratio = np.sum(energy < silence_threshold) / len(energy)
-        
-        # 5. 音声の安定性（音量の変動）
         volume_stability = 1.0 - np.std(librosa.feature.rms(y=audio)[0])
         
-        # 分析結果をテキストで返す
         analysis_result = f"""
 【音声分析結果】
 - 音量レベル: {'適切' if 0.01 < rms_energy < 0.5 else '調整が必要'}
@@ -683,56 +800,161 @@ def analyze_pronunciation_detailed(audio_file_path, text):
     except Exception as e:
         return f"音声分析中にエラーが発生しました: {str(e)}"
 
+# ================== モード処理関連 ==================
 
-
-# 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
-#  会話履歴を考慮したチェーン作成
-def create_context_aware_chain(conversation_history, user_level):
-    """会話履歴を考慮したチェーン作成"""
+def process_basic_conversation_mode():
+    """日常英会話モードの処理"""
+    audio_input_file_path = f"{ct.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    record_audio(audio_input_file_path)
     
-    context_summary = summarize_conversation_history(conversation_history)
-    #     # 簡単な会話履歴の要約（実装例）
-    # context_summary = "Previous conversation context"
+    with st.spinner('音声入力をテキストに変換中...'):
+        transcript = transcribe_audio(audio_input_file_path)
+        audio_input_text = transcript.text
     
-    # enhanced_prompt = f"""
-    # {SYSTEM_TEMPLATE_BASIC_CONVERSATION_IMPROVED}
-    enhanced_prompt = f"""
-    You are a helpful English conversation partner.
+    with st.chat_message("user", avatar=ct.USER_ICON_PATH):
+        st.markdown(audio_input_text)
     
-    【会話コンテキスト】
-    これまでの会話の要約: {context_summary}
-    ユーザーレベル: {user_level}
-    
-    【指示】
-    上記のコンテキストを考慮して、自然で一貫性のある会話を続けてください。
-    """
-    
-    return create_chain(enhanced_prompt)
-
-# 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
-#  リアルタイムフィードバック提供
-def provide_immediate_feedback(user_input, corrected_input):
-    """即座のフィードバック提供"""
-    
-    if user_input != corrected_input:
-        st.info(f"💡 より自然な表現: {corrected_input}")
+    with st.spinner("回答の音声読み上げ準備中..."):
+        improvement_analysis = analyze_user_input_improvements(audio_input_text, st.session_state.englv)
+        audio_improvement_analysis = analyze_user_audio_improvements(audio_input_file_path, audio_input_text, st.session_state.englv)
         
-        # 音声で訂正を読み上げ
-        play_correction_audio(corrected_input)
+        # 新しいAPIでチェーンを呼び出し
+        response = st.session_state.chain_basic_conversation.invoke(
+            {"input": audio_input_text},
+            config={"configurable": {"session_id": "conversation_session"}}
+        )
+        
+        # レスポンスから内容を取得
+        if hasattr(response, 'content'):
+            llm_response = response.content
+        else:
+            llm_response = str(response)
+        
+        llm_response_audio = st.session_state.openai_obj.audio.speech.create(
+            model="tts-1",
+            voice=st.session_state.voice,
+            input=llm_response
+        )
+        
+        audio_output_file_path = f"{ct.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
+        save_to_wav(llm_response_audio.content, audio_output_file_path)
+    
+    play_wav(audio_output_file_path, speed=st.session_state.speed)
+    
+    with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+        st.markdown(llm_response)
+    
+    if improvement_analysis:
+        st.session_state.last_improvement_analysis = improvement_analysis
+    if audio_improvement_analysis:
+        st.session_state.last_audio_improvement_analysis = audio_improvement_analysis
+    
+    st.session_state.messages.append({"role": "user", "content": audio_input_text})
+    st.session_state.messages.append({"role": "assistant", "content": llm_response})
 
-# 【課題】 回答精度を上げるためのアイデア  ***使うかどうかは試してみてから決める***
-#  学習進捗の追跡と可視化
-def track_learning_progress():
-    """学習進捗の追跡と可視化"""
+def process_shadowing_mode():
+    """シャドーイングモードの処理"""
+    should_process = (st.session_state.shadowing_button_flg or 
+                      st.session_state.shadowing_count == 0 or 
+                      st.session_state.shadowing_audio_input_flg)
     
-    # 実装例（実際の計算関数は別途実装が必要）
-    progress_data = {
-        "grammar_accuracy": calculate_grammar_accuracy(),
-        "vocabulary_richness": calculate_vocabulary_score(),
-        "fluency_score": calculate_fluency_score(),
-        "improvement_trend": calculate_improvement_trend()
-    }
+    if not should_process:
+        return False
     
-    # 進捗チャートの表示（実装例）
-    # display_progress_chart(progress_data)
-    return progress_data
+    if not st.session_state.shadowing_audio_input_flg:
+        with st.spinner('AI文章生成中...'):
+            st.session_state.ai_sentence, st.session_state.reference_audio_path = create_problem_and_play_audio(st.session_state.englv, "shadowing")
+    
+    st.session_state.shadowing_audio_input_flg = True
+    user_audio_path = f"{ct.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    record_audio(user_audio_path)
+    st.session_state.shadowing_audio_input_flg = False
+    
+    with st.spinner('音声品質向上処理中...'):
+        enhance_audio_quality(user_audio_path)
+    
+    with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+        st.markdown(f"**AI文章:** {st.session_state.ai_sentence}")
+    with st.chat_message("user", avatar=ct.USER_ICON_PATH):
+        st.markdown("**あなたの音声:** 録音完了")
+    
+    st.session_state.messages.append({"role": "assistant", "content": st.session_state.ai_sentence})
+    st.session_state.messages.append({"role": "user", "content": "音声録音完了"})
+    
+    with st.spinner('音声比較と評価結果の生成中...'):
+        evaluation = create_audio_based_evaluation(
+            st.session_state.ai_sentence,
+            st.session_state.reference_audio_path,
+            user_audio_path,
+            st.session_state.englv
+        )
+    
+    with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+        st.markdown(evaluation)
+    st.session_state.messages.append({"role": "assistant", "content": evaluation})
+    st.session_state.messages.append({"role": "other"})
+    
+    cleanup_audio_files(
+        user_audio_path,
+        st.session_state.reference_audio_path if hasattr(st.session_state, 'reference_audio_path') else None
+    )
+    
+    st.session_state.shadowing_flg = True
+    st.session_state.shadowing_count += 1
+    return True
+
+def process_dictation_mode():
+    """ディクテーションモードの処理"""
+    should_process = (st.session_state.dictation_button_flg or 
+                      st.session_state.dictation_count == 0 or 
+                      st.session_state.dictation_user_input)
+    
+    if not should_process:
+        return False
+    
+    # AI文章生成フェーズ
+    if not st.session_state.chat_open_flg:
+        with st.spinner('AI文章生成中...'):
+            st.session_state.ai_sentence, ai_audio_path = create_problem_and_play_audio(st.session_state.englv, "dictation")
+        
+        st.session_state.chat_open_flg = True
+        st.session_state.dictation_flg = False
+        return True
+    
+    # 評価フェーズ
+    else:
+        if not st.session_state.dictation_user_input:
+            return False
+        
+        with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+            st.markdown(f"**AI文章:** {st.session_state.ai_sentence}")
+        with st.chat_message("user", avatar=ct.USER_ICON_PATH):
+            st.markdown(f"**あなたの回答:** {st.session_state.dictation_user_input}")
+        
+        st.session_state.messages.append({"role": "assistant", "content": st.session_state.ai_sentence})
+        st.session_state.messages.append({"role": "user", "content": st.session_state.dictation_user_input})
+        
+        with st.spinner('評価結果の生成中...'):
+            if st.session_state.englv in ct.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL:
+                system_template = ct.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL[st.session_state.englv].format(
+                    llm_text=st.session_state.ai_sentence,
+                    user_text=st.session_state.dictation_user_input
+                )
+            else:
+                system_template = ct.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL["初級者"].format(
+                    llm_text=st.session_state.ai_sentence,
+                    user_text=st.session_state.dictation_user_input
+                )
+            st.session_state.chain_evaluation = create_chain(system_template)
+            evaluation = create_evaluation(st.session_state.englv)
+        
+        with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+            st.markdown(evaluation)
+        st.session_state.messages.append({"role": "assistant", "content": evaluation})
+        st.session_state.messages.append({"role": "other"})
+        
+        st.session_state.dictation_flg = True
+        st.session_state.dictation_user_input = ""
+        st.session_state.dictation_count += 1
+        st.session_state.chat_open_flg = False
+        return True
