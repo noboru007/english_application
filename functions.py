@@ -211,20 +211,17 @@ def initialize_session_state():
     
     # 音声ディレクトリの作成とクリーンアップ
     try:
+        # ディレクトリを作成（存在しない場合は作成）
         os.makedirs(const.AUDIO_INPUT_DIR, exist_ok=True)
         os.makedirs(const.AUDIO_OUTPUT_DIR, exist_ok=True)
         
-        # 残っている音声ファイルを削除
-        for file in os.listdir(const.AUDIO_INPUT_DIR):
-            file_path = os.path.join(const.AUDIO_INPUT_DIR, file)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
+        # 残っている音声ファイルを削除（安全に実行）
+        cleanup_audio_directory(const.AUDIO_INPUT_DIR)
+        cleanup_audio_directory(const.AUDIO_OUTPUT_DIR)
         
-        for file in os.listdir(const.AUDIO_OUTPUT_DIR):
-            file_path = os.path.join(const.AUDIO_OUTPUT_DIR, file)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-    except Exception:
+    except Exception as e:
+        # エラーが発生してもアプリを停止させない
+        print(f"音声ディレクトリ初期化エラー: {e}")
         pass
 
     # 音声設定の初期化
@@ -409,6 +406,24 @@ def play_wav(audio_output_path, speed=1.0):
         
     except (OSError, Exception) as e:
         print(f"音声再生エラーをスキップしました: {e}")
+        pass
+
+def cleanup_audio_directory(directory_path):
+    """
+    音声ディレクトリ内のファイルをクリーンアップ
+    Args:
+        directory_path: クリーンアップするディレクトリのパス
+    """
+    try:
+        if os.path.exists(directory_path) and os.path.isdir(directory_path):
+            for file in os.listdir(directory_path):
+                file_path = os.path.join(directory_path, file)
+                if os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+    except Exception:
         pass
 
 def cleanup_audio_files(*audio_paths):
