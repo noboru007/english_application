@@ -209,11 +209,23 @@ def initialize_session_state():
     for key, value in initial_state.items():
         st.session_state[key] = value
     
-    # inとoutフォルダに残っている音声ファイルを削除
-    for file in os.listdir(const.AUDIO_INPUT_DIR):
-        os.remove(os.path.join(const.AUDIO_INPUT_DIR, file))
-    for file in os.listdir(const.AUDIO_OUTPUT_DIR):
-        os.remove(os.path.join(const.AUDIO_OUTPUT_DIR, file))
+    # 音声ディレクトリの作成とクリーンアップ
+    try:
+        os.makedirs(const.AUDIO_INPUT_DIR, exist_ok=True)
+        os.makedirs(const.AUDIO_OUTPUT_DIR, exist_ok=True)
+        
+        # 残っている音声ファイルを削除
+        for file in os.listdir(const.AUDIO_INPUT_DIR):
+            file_path = os.path.join(const.AUDIO_INPUT_DIR, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        
+        for file in os.listdir(const.AUDIO_OUTPUT_DIR):
+            file_path = os.path.join(const.AUDIO_OUTPUT_DIR, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+    except Exception:
+        pass
 
     # 音声設定の初期化
     voice_settings = const.VOICE_SETTINGS["初級者"]
