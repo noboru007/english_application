@@ -1,10 +1,10 @@
 def process_basic_conversation_mode():
     """日常英会話モードの処理"""
-    audio_input_file_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
-    record_audio(audio_input_file_path)
+    user_audio_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    record_audio(user_audio_path)
     
     with st.spinner('音声入力をテキストに変換中...'):
-        transcript = transcribe_audio(audio_input_file_path)
+        transcript = transcribe_audio(user_audio_path)
         audio_input_text = transcript.text
     
     with st.chat_message("user", avatar=const.USER_ICON_PATH):
@@ -12,7 +12,7 @@ def process_basic_conversation_mode():
     
     with st.spinner("回答の音声読み上げ準備中..."):
         improvement_analysis = analyze_user_input_improvements(audio_input_text, st.session_state.english_level)
-        audio_improvement_analysis = analyze_user_audio_improvements(audio_input_file_path, audio_input_text, st.session_state.english_level)
+        audio_improvement_analysis = analyze_user_audio_improvements(user_audio_path, audio_input_text, st.session_state.english_level)
         
         # 新しいAPIでチェーンを呼び出し
         response = st.session_state.chain_basic_conversation.invoke(
@@ -26,16 +26,16 @@ def process_basic_conversation_mode():
         else:
             llm_response = str(response)
         
-        llm_response_audio = st.session_state.openai_client.audio.speech.create(
+        ai_audio = st.session_state.openai_client.audio.speech.create(
             model="tts-1",
             voice=st.session_state.voice,
             input=llm_response
         )
         
-        audio_output_file_path = f"{const.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
-        save_to_wav(llm_response_audio.content, audio_output_file_path)
+        audio_output_path = f"{const.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
+        save_to_wav(ai_audio.content, audio_output_path)
     
-    play_wav(audio_output_file_path, speed=st.session_state.speed)
+    play_wav(audio_output_path, speed=st.session_state.speed)
     
     with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
         st.markdown(llm_response)
@@ -59,7 +59,7 @@ def process_shadowing_mode():
     
     if not st.session_state.shadowing_audio_input_flag:
         with st.spinner('AI文章生成中...'):
-            st.session_state.ai_sentence, st.session_state.reference_audio_path = create_problem_and_play_audio(st.session_state.english_level, "shadowing")
+            st.session_state.ai_sentence, st.session_state.reference_audio_path = create_ai_sentence_and_play_audio(st.session_state.english_level, "shadowing")
     
     st.session_state.shadowing_audio_input_flag = True
     user_audio_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
@@ -111,7 +111,7 @@ def process_dictation_mode():
     # AI文章生成フェーズ
     if not st.session_state.chat_open_flag:
         with st.spinner('AI文章生成中...'):
-            st.session_state.ai_sentence, ai_audio_path = create_problem_and_play_audio(st.session_state.english_level, "dictation")
+            st.session_state.ai_sentence, ai_audio_path = create_ai_sentence_and_play_audio(st.session_state.english_level, "dictation")
         
         st.session_state.chat_open_flag = True
         st.session_state.dictation_flag = False
@@ -133,12 +133,12 @@ def process_dictation_mode():
         with st.spinner('評価結果の生成中...'):
             if st.session_state.english_level in const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL:
                 system_template = const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL[st.session_state.english_level].format(
-                    llm_text=st.session_state.ai_sentence,
+                    ai_sentence=st.session_state.ai_sentence,
                     user_text=st.session_state.dictation_user_input
                 )
             else:
                 system_template = const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL["初級者"].format(
-                    llm_text=st.session_state.ai_sentence,
+                    ai_sentence=st.session_state.ai_sentence,
                     user_text=st.session_state.dictation_user_input
                 )
             st.session_state.chain_evaluation = create_chain(system_template)
@@ -209,6 +209,12 @@ def initialize_session_state():
     for key, value in initial_state.items():
         st.session_state[key] = value
     
+    # inとoutフォルダに残っている音声ファイルを削除
+    for file in os.listdir(const.AUDIO_INPUT_DIR):
+        os.remove(os.path.join(const.AUDIO_INPUT_DIR, file))
+    for file in os.listdir(const.AUDIO_OUTPUT_DIR):
+        os.remove(os.path.join(const.AUDIO_OUTPUT_DIR, file))
+
     # 音声設定の初期化
     voice_settings = const.VOICE_SETTINGS["初級者"]
     st.session_state.voice = voice_settings["voice"]
@@ -273,11 +279,11 @@ def handle_english_level_change():
 
 # ================== 音声処理関連 ==================
 
-def record_audio(audio_input_file_path):
+def record_audio(user_audio_path):
     """
     音声入力を受け取って音声ファイルを作成
     Args:
-        audio_input_file_path: 音声ファイルの保存パス
+        user_audio_path: 音声ファイルの保存パス
     """
     try:
         audio = audiorecorder(
@@ -287,7 +293,7 @@ def record_audio(audio_input_file_path):
         )
 
         if len(audio) > 0:
-            audio.export(audio_input_file_path, format="wav")
+            audio.export(user_audio_path, format="wav")
         else:
             st.stop()
     except Exception as e:
@@ -295,28 +301,28 @@ def record_audio(audio_input_file_path):
         st.error("音声録音に失敗しました。テキスト入力でお試しください。")
         st.stop()
 
-def transcribe_audio(audio_input_file_path, enhance_quality=True):
+def transcribe_audio(user_audio_path, enhance_quality=True):
     """
     音声入力ファイルから文字起こしテキストを取得
     Args:
-        audio_input_file_path: 音声入力ファイルのパス
+        user_audio_path: 音声入力ファイルのパス
         enhance_quality: 音声品質向上処理を行うかどうか
     """
-    if not os.path.exists(audio_input_file_path):
+    if not os.path.exists(user_audio_path):
         return None
     
-    file_size = os.path.getsize(audio_input_file_path)
+    file_size = os.path.getsize(user_audio_path)
     if file_size == 0:
         return None
 
     if enhance_quality:
         try:
-            enhanced_audio_path = enhance_audio_quality(audio_input_file_path)
+            enhanced_audio_path = enhance_audio_quality(user_audio_path)
         except Exception as e:
             pass
 
     try:
-        with open(audio_input_file_path, 'rb') as audio_input_file:
+        with open(user_audio_path, 'rb') as audio_input_file:
             transcript = st.session_state.openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_input_file,
@@ -325,37 +331,37 @@ def transcribe_audio(audio_input_file_path, enhance_quality=True):
     except Exception as e:
         return None
     
-    os.remove(audio_input_file_path)
+    os.remove(user_audio_path)
     return transcript
 
-def save_to_wav(llm_response_audio, audio_output_file_path):
+def save_to_wav(ai_audio, audio_output_path):
     """
     mp3からwav形式に変換して保存
     Args:
-        llm_response_audio: LLMからの回答の音声データ
-        audio_output_file_path: 出力先のファイルパス
+        ai_audio: AIからの回答の音声データ
+        audio_output_path: 出力先のファイルパス
     """
     temp_audio_path = f"{const.AUDIO_OUTPUT_DIR}/temp_audio_output_{int(time.time())}.mp3"
     
     try:
         with open(temp_audio_path, "wb") as f:
-            f.write(llm_response_audio)
+            f.write(ai_audio)
         
         audio_mp3 = AudioSegment.from_file(temp_audio_path, format="mp3")
-        audio_mp3.export(audio_output_file_path, format="wav")
+        audio_mp3.export(audio_output_path, format="wav")
     finally:
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
-def play_wav(audio_output_file_path, speed=1.0):
+def play_wav(audio_output_path, speed=1.0):
     """
     音声ファイルの読み上げ
     Args:
-        audio_output_file_path: 音声ファイルのパス
+        audio_output_path: 音声ファイルのパス
         speed: 再生速度
     """
     try:
-        audio = AudioSegment.from_wav(audio_output_file_path)
+        audio = AudioSegment.from_wav(audio_output_path)
         
         # 速度変更
         if speed != 1.0:
@@ -363,14 +369,14 @@ def play_wav(audio_output_file_path, speed=1.0):
                 audio.raw_data, 
                 overrides={"frame_rate": int(audio.frame_rate * speed)}
             )
-            temp_audio_path = audio_output_file_path.replace('.wav', '_temp.wav')
+            temp_audio_path = audio_output_path.replace('.wav', '_temp.wav')
             modified_audio.export(temp_audio_path, format="wav")
             
             import shutil
-            shutil.move(temp_audio_path, audio_output_file_path)
+            shutil.move(temp_audio_path, audio_output_path)
 
         # PyAudioで再生
-        with wave.open(audio_output_file_path, 'rb') as wf:
+        with wave.open(audio_output_path, 'rb') as wf:
             p = pyaudio.PyAudio()
             stream = p.open(
                 format=p.get_format_from_width(wf.getsampwidth()),
@@ -533,7 +539,7 @@ def get_avoid_vocabulary(mode):
     
     return avoid_vocab
 
-def create_problem_and_play_audio(english_level="初級者", mode="shadowing"):
+def create_ai_sentence_and_play_audio(english_level="初級者", mode="shadowing"):
     """
     AI文章生成と音声ファイルの再生
     Args:
@@ -545,9 +551,9 @@ def create_problem_and_play_audio(english_level="初級者", mode="shadowing"):
     import random
     
     # プロンプト選択
-    base_prompt = const.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL.get(
+    base_prompt = const.SYSTEM_TEMPLATE_SHADOWING_AI_SENTENCE_BY_LEVEL.get(
         english_level,
-        const.SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL["初級者"]
+        const.SYSTEM_TEMPLATE_SHADOWING_AI_SENTENCE_BY_LEVEL["初級者"]
     )
     
     # 避けるべき語彙を取得
@@ -679,19 +685,19 @@ def create_audio_based_evaluation(ai_sentence, reference_audio_path, user_audio_
     
     if english_level in const.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL:
         system_template = const.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL[english_level].format(
-            problem_text=ai_sentence,
+            ai_sentence=ai_sentence,
             audio_analysis=audio_analysis
         )
     else:
         system_template = const.SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL["初級者"].format(
-            problem_text=ai_sentence,
+            ai_sentence=ai_sentence,
             audio_analysis=audio_analysis
         )
 
     st.session_state.chain_evaluation = create_chain(system_template)
-    llm_response_evaluation = create_evaluation(english_level)
+    evaluation = create_evaluation(english_level)
 
-    return llm_response_evaluation
+    return evaluation
 
 # ================== 改善点分析関連 ==================
 
@@ -804,19 +810,19 @@ def analyze_pronunciation_detailed(audio_file_path, text):
 
 def process_basic_conversation_mode():
     """日常英会話モードの処理"""
-    audio_input_file_path = f"{ct.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
-    record_audio(audio_input_file_path)
+    user_audio_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    record_audio(user_audio_path)
     
     with st.spinner('音声入力をテキストに変換中...'):
-        transcript = transcribe_audio(audio_input_file_path)
+        transcript = transcribe_audio(user_audio_path)
         audio_input_text = transcript.text
     
-    with st.chat_message("user", avatar=ct.USER_ICON_PATH):
+    with st.chat_message("user", avatar=const.USER_ICON_PATH):
         st.markdown(audio_input_text)
     
     with st.spinner("回答の音声読み上げ準備中..."):
-        improvement_analysis = analyze_user_input_improvements(audio_input_text, st.session_state.englv)
-        audio_improvement_analysis = analyze_user_audio_improvements(audio_input_file_path, audio_input_text, st.session_state.englv)
+        improvement_analysis = analyze_user_input_improvements(audio_input_text, st.session_state.english_level)
+        audio_improvement_analysis = analyze_user_audio_improvements(user_audio_path, audio_input_text, st.session_state.english_level)
         
         # 新しいAPIでチェーンを呼び出し
         response = st.session_state.chain_basic_conversation.invoke(
@@ -830,18 +836,18 @@ def process_basic_conversation_mode():
         else:
             llm_response = str(response)
         
-        llm_response_audio = st.session_state.openai_obj.audio.speech.create(
+        ai_audio = st.session_state.openai_client.audio.speech.create(
             model="tts-1",
             voice=st.session_state.voice,
             input=llm_response
         )
         
-        audio_output_file_path = f"{ct.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
-        save_to_wav(llm_response_audio.content, audio_output_file_path)
+        audio_output_path = f"{const.AUDIO_OUTPUT_DIR}/audio_output_{int(time.time())}.wav"
+        save_to_wav(ai_audio.content, audio_output_path)
     
-    play_wav(audio_output_file_path, speed=st.session_state.speed)
+    play_wav(audio_output_path, speed=st.session_state.speed)
     
-    with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+    with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
         st.markdown(llm_response)
     
     if improvement_analysis:
@@ -854,28 +860,28 @@ def process_basic_conversation_mode():
 
 def process_shadowing_mode():
     """シャドーイングモードの処理"""
-    should_process = (st.session_state.shadowing_button_flg or 
+    should_process = (st.session_state.shadowing_button_flag or 
                       st.session_state.shadowing_count == 0 or 
-                      st.session_state.shadowing_audio_input_flg)
+                      st.session_state.shadowing_audio_input_flag)
     
     if not should_process:
         return False
     
-    if not st.session_state.shadowing_audio_input_flg:
+    if not st.session_state.shadowing_audio_input_flag:
         with st.spinner('AI文章生成中...'):
-            st.session_state.ai_sentence, st.session_state.reference_audio_path = create_problem_and_play_audio(st.session_state.englv, "shadowing")
+            st.session_state.ai_sentence, st.session_state.reference_audio_path = create_ai_sentence_and_play_audio(st.session_state.english_level, "shadowing")
     
-    st.session_state.shadowing_audio_input_flg = True
-    user_audio_path = f"{ct.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
+    st.session_state.shadowing_audio_input_flag = True
+    user_audio_path = f"{const.AUDIO_INPUT_DIR}/audio_input_{int(time.time())}.wav"
     record_audio(user_audio_path)
-    st.session_state.shadowing_audio_input_flg = False
+    st.session_state.shadowing_audio_input_flag = False
     
     with st.spinner('音声品質向上処理中...'):
         enhance_audio_quality(user_audio_path)
     
-    with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+    with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
         st.markdown(f"**AI文章:** {st.session_state.ai_sentence}")
-    with st.chat_message("user", avatar=ct.USER_ICON_PATH):
+    with st.chat_message("user", avatar=const.USER_ICON_PATH):
         st.markdown("**あなたの音声:** 録音完了")
     
     st.session_state.messages.append({"role": "assistant", "content": st.session_state.ai_sentence})
@@ -886,10 +892,10 @@ def process_shadowing_mode():
             st.session_state.ai_sentence,
             st.session_state.reference_audio_path,
             user_audio_path,
-            st.session_state.englv
+            st.session_state.english_level
         )
     
-    with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+    with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
         st.markdown(evaluation)
     st.session_state.messages.append({"role": "assistant", "content": evaluation})
     st.session_state.messages.append({"role": "other"})
@@ -899,13 +905,13 @@ def process_shadowing_mode():
         st.session_state.reference_audio_path if hasattr(st.session_state, 'reference_audio_path') else None
     )
     
-    st.session_state.shadowing_flg = True
+    st.session_state.shadowing_flag = True
     st.session_state.shadowing_count += 1
     return True
 
 def process_dictation_mode():
     """ディクテーションモードの処理"""
-    should_process = (st.session_state.dictation_button_flg or 
+    should_process = (st.session_state.dictation_button_flag or 
                       st.session_state.dictation_count == 0 or 
                       st.session_state.dictation_user_input)
     
@@ -913,12 +919,12 @@ def process_dictation_mode():
         return False
     
     # AI文章生成フェーズ
-    if not st.session_state.chat_open_flg:
+    if not st.session_state.chat_open_flag:
         with st.spinner('AI文章生成中...'):
-            st.session_state.ai_sentence, ai_audio_path = create_problem_and_play_audio(st.session_state.englv, "dictation")
+            st.session_state.ai_sentence, ai_audio_path = create_ai_sentence_and_play_audio(st.session_state.english_level, "dictation")
         
-        st.session_state.chat_open_flg = True
-        st.session_state.dictation_flg = False
+        st.session_state.chat_open_flag = True
+        st.session_state.dictation_flag = False
         return True
     
     # 評価フェーズ
@@ -926,35 +932,35 @@ def process_dictation_mode():
         if not st.session_state.dictation_user_input:
             return False
         
-        with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+        with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
             st.markdown(f"**AI文章:** {st.session_state.ai_sentence}")
-        with st.chat_message("user", avatar=ct.USER_ICON_PATH):
+        with st.chat_message("user", avatar=const.USER_ICON_PATH):
             st.markdown(f"**あなたの回答:** {st.session_state.dictation_user_input}")
         
         st.session_state.messages.append({"role": "assistant", "content": st.session_state.ai_sentence})
         st.session_state.messages.append({"role": "user", "content": st.session_state.dictation_user_input})
         
         with st.spinner('評価結果の生成中...'):
-            if st.session_state.englv in ct.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL:
-                system_template = ct.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL[st.session_state.englv].format(
-                    llm_text=st.session_state.ai_sentence,
+            if st.session_state.english_level in const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL:
+                system_template = const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL[st.session_state.english_level].format(
+                    ai_sentence=st.session_state.ai_sentence,
                     user_text=st.session_state.dictation_user_input
                 )
             else:
-                system_template = ct.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL["初級者"].format(
-                    llm_text=st.session_state.ai_sentence,
+                system_template = const.SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL["初級者"].format(
+                    ai_sentence=st.session_state.ai_sentence,
                     user_text=st.session_state.dictation_user_input
                 )
             st.session_state.chain_evaluation = create_chain(system_template)
-            evaluation = create_evaluation(st.session_state.englv)
+            evaluation = create_evaluation(st.session_state.english_level)
         
-        with st.chat_message("assistant", avatar=ct.AI_ICON_PATH):
+        with st.chat_message("assistant", avatar=const.AI_ICON_PATH):
             st.markdown(evaluation)
         st.session_state.messages.append({"role": "assistant", "content": evaluation})
         st.session_state.messages.append({"role": "other"})
         
-        st.session_state.dictation_flg = True
+        st.session_state.dictation_flag = True
         st.session_state.dictation_user_input = ""
         st.session_state.dictation_count += 1
-        st.session_state.chat_open_flg = False
+        st.session_state.chat_open_flag = False
         return True

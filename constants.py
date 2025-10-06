@@ -137,7 +137,7 @@ INCLUDE: Advanced vocabulary, complex grammar, idioms, cultural context
 
 # 約15語のシンプルな英文生成を指示するプロンプト
 # 【課題】 回答精度を上げるために、プロンプトをより詳細に設定
-SYSTEM_TEMPLATE_CREATE_PROBLEM = """
+SYSTEM_TEMPLATE_CREATE_AI_SENTENCE = """
 You are an expert English language curriculum designer. Generate ONE natural, engaging English sentence for practice.
 
 REQUIREMENTS:
@@ -242,7 +242,8 @@ Generate ONE completely unique sentence that provides excellent pronunciation pr
 """
 
 # シャドーイング・ディクテーション用のレベル別問題文生成プロンプト
-SYSTEM_TEMPLATE_SHADOWING_PROBLEM_BY_LEVEL = {
+# SYSTEM_TEMPLATE_SHADOWING_AI_SENTENCE_BY_LEVEL = {
+SYSTEM_TEMPLATE_SHADOWING_AI_SENTENCE_BY_LEVEL = {
     "キッズ": """
 You are an expert English language curriculum designer specializing in shadowing practice for young children (elementary school level, Eiken Grade 5 equivalent).
 
@@ -431,7 +432,7 @@ SYSTEM_TEMPLATE_EVALUATION = """
 以下の「LLMによる問題文」とユーザーがディクテーションで真似をした「ユーザーによる回答文」を比較し、一致度を分析してください：
 
     【LLMによる問題文】
-    問題文：{llm_text}
+    問題文：{ai_sentence}
 
     【ユーザーによる回答文】
     回答文：{user_text}
@@ -460,7 +461,7 @@ SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL = {
 以下の「問題文」と「音声分析結果」を基に、子供向けに分かりやすく、励ましの言葉で発音を評価してください：
 
 【問題文】
-{problem_text}
+{ai_sentence}
 
 【音声分析結果】
 {audio_analysis}
@@ -488,7 +489,7 @@ SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL = {
 以下の「問題文」と「音声分析結果」を基に、初級者に適したレベルで発音を評価してください：
 
 【問題文】
-{problem_text}
+{ai_sentence}
 
 【音声分析結果】
 {audio_analysis}
@@ -516,7 +517,7 @@ SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL = {
 以下の「問題文」と「音声分析結果」を基に、中級者に適したレベルで発音を評価してください：
 
 【問題文】
-{problem_text}
+{ai_sentence}
 
 【音声分析結果】
 {audio_analysis}
@@ -544,7 +545,7 @@ SYSTEM_TEMPLATE_SHADOWING_EVALUATION_BY_LEVEL = {
 以下の「問題文」と「音声分析結果」を基に、上級者に適したレベルで発音を評価してください：
 
 【問題文】
-{problem_text}
+{ai_sentence}
 
 【音声分析結果】
 {audio_analysis}
@@ -575,7 +576,7 @@ SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL = {
 以下の「LLMによる問題文」とユーザーがディクテーションで書いた「ユーザーによる回答文」を比較し、子供向けに分かりやすく、励ましの言葉で評価してください：
 
 【LLMによる問題文】
-問題文：{llm_text}
+問題文：{ai_sentence}
 
 【ユーザーによる回答文】
 ユーザー回答：{user_text}
@@ -603,7 +604,7 @@ SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL = {
 以下の「LLMによる問題文」とユーザーがディクテーションで書いた「ユーザーによる回答文」を比較し、初級者に適したレベルで評価してください：
 
 【LLMによる問題文】
-問題文：{llm_text}
+問題文：{ai_sentence}
 
 【ユーザーによる回答文】
 ユーザー回答：{user_text}
@@ -631,7 +632,7 @@ SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL = {
 以下の「LLMによる問題文」とユーザーがディクテーションで書いた「ユーザーによる回答文」を比較し、中級者に適したレベルで評価してください：
 
 【LLMによる問題文】
-問題文：{llm_text}
+問題文：{ai_sentence}
 
 【ユーザーによる回答文】
 ユーザー回答：{user_text}
@@ -659,7 +660,7 @@ SYSTEM_TEMPLATE_DICTATION_EVALUATION_BY_LEVEL = {
 以下の「LLMによる問題文」とユーザーがディクテーションで書いた「ユーザーによる回答文」を比較し、上級者に適したレベルで評価してください：
 
 【LLMによる問題文】
-問題文：{llm_text}
+問題文：{ai_sentence}
 
 【ユーザーによる回答文】
 ユーザー回答：{user_text}
@@ -690,7 +691,7 @@ SYSTEM_TEMPLATE_SHADOWING_EVALUATION = """
 以下の「問題文」と「音声分析結果」を基に、ユーザーの発音を評価してください：
 
 【問題文】
-{problem_text}
+{ai_sentence}
 
 【音声分析結果】
 {audio_analysis}
