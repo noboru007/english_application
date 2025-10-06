@@ -382,49 +382,121 @@ def save_to_wav(ai_audio, audio_output_path):
 
 def play_wav(audio_output_path, speed=1.0):
     """
-    音声ファイルの読み上げ
+    音声ファイルの読み上げ（Streamlit Cloud対応版）
     Args:
         audio_output_path: 音声ファイルのパス
         speed: 再生速度
     """
     try:
-        audio = AudioSegment.from_wav(audio_output_path)
+        # Streamlit Cloudでは音声デバイスが利用できないため、
+        # ブラウザで再生可能な音声ファイルを提供
+        if is_streamlit_cloud():
+            # ブラウザで再生可能な形式で音声ファイルを提供
+            play_audio_in_browser(audio_output_path, speed)
+        else:
+            # ローカル環境では従来の再生方法
+            play_wav_local(audio_output_path, speed)
         
-        # 速度変更
+    except Exception as e:
+        print(f"音声再生エラーをスキップしました: {e}")
+        pass
+
+def is_streamlit_cloud():
+    """
+    Streamlit Cloud環境かどうかを判定
+    """
+    import os
+    # Streamlit Cloudの環境変数をチェック
+    return os.environ.get('STREAMLIT_CLOUD') == 'true' or 'streamlit.app' in os.environ.get('_', '')
+
+def play_audio_in_browser(audio_output_path, speed=1.0):
+    """
+    ブラウザで音声を再生
+    Args:
+        audio_output_path: 音声ファイルのパス
+        speed: 再生速度
+    """
+    try:
+        # 音声ファイルの速度調整
         if speed != 1.0:
+            audio = AudioSegment.from_wav(audio_output_path)
             modified_audio = audio._spawn(
                 audio.raw_data, 
                 overrides={"frame_rate": int(audio.frame_rate * speed)}
             )
             temp_audio_path = audio_output_path.replace('.wav', '_temp.wav')
             modified_audio.export(temp_audio_path, format="wav")
-            
-            import shutil
-            shutil.move(temp_audio_path, audio_output_path)
+            audio_output_path = temp_audio_path
 
-        # PyAudioで再生
-        with wave.open(audio_output_path, 'rb') as wf:
-            p = pyaudio.PyAudio()
-            stream = p.open(
-                format=p.get_format_from_width(wf.getsampwidth()),
-                channels=wf.getnchannels(),
-                rate=wf.getframerate(),
-                output=True
-            )
-
-            chunk = 1024
-            data = wf.readframes(chunk)
-            while data:
-                stream.write(data)
-                data = wf.readframes(chunk)
-
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
+        # 音声ファイルをBase64エンコードしてブラウザで再生
+        import base64
         
-    except (OSError, Exception) as e:
-        print(f"音声再生エラーをスキップしました: {e}")
+        with open(audio_output_path, "rb") as audio_file:
+            audio_bytes = audio_file.read()
+            audio_base64 = base64.b64encode(audio_bytes).decode()
+            
+            # HTML audio要素を生成
+            audio_html = f"""
+            <audio controls autoplay style="width: 100%;">
+                <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
+                お使いのブラウザは音声再生をサポートしていません。
+            </audio>
+            """
+            
+            st.markdown(audio_html, unsafe_allow_html=True)
+            
+            # 一時ファイルをクリーンアップ
+            if speed != 1.0 and os.path.exists(audio_output_path):
+                try:
+                    os.remove(audio_output_path)
+                except Exception:
+                    pass
+                    
+    except Exception as e:
+        print(f"ブラウザ音声再生エラー: {e}")
         pass
+
+def play_wav_local(audio_output_path, speed=1.0):
+    """
+    ローカル環境での音声再生
+    Args:
+        audio_output_path: 音声ファイルのパス
+        speed: 再生速度
+    """
+    audio = AudioSegment.from_wav(audio_output_path)
+    
+    # 速度変更
+    if speed != 1.0:
+        modified_audio = audio._spawn(
+            audio.raw_data, 
+            overrides={"frame_rate": int(audio.frame_rate * speed)}
+        )
+        temp_audio_path = audio_output_path.replace('.wav', '_temp.wav')
+        modified_audio.export(temp_audio_path, format="wav")
+        
+        import shutil
+        shutil.move(temp_audio_path, audio_output_path)
+
+    # PyAudioで再生
+    with wave.open(audio_output_path, 'rb') as wf:
+        p = pyaudio.PyAudio()
+        stream = p.open(
+            format=p.get_format_from_width(wf.getsampwidth()),
+            channels=wf.getnchannels(),
+            rate=wf.getframerate(),
+            output=True
+        )
+
+        chunk = 1024
+        data = wf.readframes(chunk)
+        while data:
+            stream.write(data)
+            data = wf.readframes(chunk)
+
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
 
 def cleanup_audio_directory(directory_path):
     """
