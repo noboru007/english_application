@@ -160,7 +160,6 @@ import os
 import time
 from pathlib import Path
 import wave
-import pyaudio
 from pydub import AudioSegment
 from audiorecorder import audiorecorder
 import numpy as np
@@ -446,6 +445,8 @@ def play_wav_local(audio_output_path, speed=1.0):
         audio_output_path: 音声ファイルのパス
         speed: 再生速度
     """
+    import pyaudio # ローカル再生時のみインポートなのでここに置く
+
     audio = AudioSegment.from_wav(audio_output_path)
     
     # 速度変更
