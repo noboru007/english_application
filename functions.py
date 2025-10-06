@@ -411,7 +411,7 @@ def is_streamlit_cloud():
 
 def play_audio_in_browser(audio_output_path, speed=1.0):
     """
-    ブラウザで音声を再生
+    ブラウザで音声を再生（st.audioを使用する改善版）
     Args:
         audio_output_path: 音声ファイルのパス
         speed: 再生速度
@@ -420,41 +420,24 @@ def play_audio_in_browser(audio_output_path, speed=1.0):
         # 音声ファイルの速度調整
         if speed != 1.0:
             audio = AudioSegment.from_wav(audio_output_path)
+            # フレームレートを変更することで再生速度を調整
             modified_audio = audio._spawn(
                 audio.raw_data, 
                 overrides={"frame_rate": int(audio.frame_rate * speed)}
             )
-            temp_audio_path = audio_output_path.replace('.wav', '_temp.wav')
-            modified_audio.export(temp_audio_path, format="wav")
-            audio_output_path = temp_audio_path
-
-        # 音声ファイルをBase64エンコードしてブラウザで再生
-        import base64
-        
-        with open(audio_output_path, "rb") as audio_file:
-            audio_bytes = audio_file.read()
-            audio_base64 = base64.b64encode(audio_bytes).decode()
+            # 変更後の音声データをメモリ上で扱う
+            from io import BytesIO
+            buffer = BytesIO()
+            modified_audio.export(buffer, format="wav")
+            buffer.seek(0)
+            st.audio(buffer, format='audio/wav')
+        else:
+            # 速度変更がない場合はファイルを直接再生
+            st.audio(audio_output_path)
             
-            # HTML audio要素を生成
-            audio_html = f"""
-            <audio controls autoplay style="width: 100%;">
-                <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
-                お使いのブラウザは音声再生をサポートしていません。
-            </audio>
-            """
-            
-            st.markdown(audio_html, unsafe_allow_html=True)
-            
-            # 一時ファイルをクリーンアップ
-            if speed != 1.0 and os.path.exists(audio_output_path):
-                try:
-                    os.remove(audio_output_path)
-                except Exception:
-                    pass
-                    
     except Exception as e:
         print(f"ブラウザ音声再生エラー: {e}")
-        pass
+        st.error("音声の再生中にエラーが発生しました。")
 
 def play_wav_local(audio_output_path, speed=1.0):
     """
