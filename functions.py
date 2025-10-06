@@ -379,6 +379,49 @@ def save_to_wav(ai_audio, audio_output_path):
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
+def play_wav_local(audio_output_path, speed=1.0):
+    """
+    ローカル環境での音声再生
+    Args:
+        audio_output_path: 音声ファイルのパス
+        speed: 再生速度
+    """
+    import pyaudio  # ローカル再生時のみインポート
+    import wave
+    from pydub import AudioSegment
+    import shutil
+
+    # 速度変更
+    if speed != 1.0:
+        audio = AudioSegment.from_wav(audio_output_path)
+        modified_audio = audio._spawn(
+            audio.raw_data, 
+            overrides={"frame_rate": int(audio.frame_rate * speed)}
+        )
+        temp_audio_path = audio_output_path.replace('.wav', '_temp.wav')
+        modified_audio.export(temp_audio_path, format="wav")
+        shutil.move(temp_audio_path, audio_output_path)
+
+    # PyAudioで再生
+    with wave.open(audio_output_path, 'rb') as wf:
+        p = pyaudio.PyAudio()
+        stream = p.open(
+            format=p.get_format_from_width(wf.getsampwidth()),
+            channels=wf.getnchannels(),
+            rate=wf.getframerate(),
+            output=True
+        )
+
+        chunk = 1024
+        data = wf.readframes(chunk)
+        while data:
+            stream.write(data)
+            data = wf.readframes(chunk)
+
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
 def play_wav(audio_output_path, speed=1.0):
     """
     音声ファイルの読み上げ（Streamlit Cloud対応版）
@@ -405,81 +448,102 @@ def is_streamlit_cloud():
     Streamlit Cloud環境かどうかを判定
     """
     import os
-    # Streamlit Cloudの環境変数をチェック
-    return os.environ.get('STREAMLIT_CLOUD') == 'true' or 'streamlit.app' in os.environ.get('_', '')
+    import socket
+    
+    # 複数の条件でStreamlit Cloud環境を判定
+    indicators = [
+        os.environ.get('STREAMLIT_SHARING_MODE') == 'true',
+        os.environ.get('STREAMLIT_SERVER_ADDRESS') is not None,
+        'streamlit.app' in socket.gethostname().lower() if socket.gethostname() else False,
+        os.path.exists('/.dockerenv'),  # Docker環境
+        os.environ.get('HOME', '').startswith('/home/appuser')  # Streamlit Cloudの典型的なホームディレクトリ
+    ]
+    
+    return any(indicators)
 
 def play_audio_in_browser(audio_output_path, speed=1.0):
     """
-    ブラウザで音声を再生（st.audioを使用する改善版）
+    ブラウザで音声を再生(st.audioを使用する改善版)
     Args:
         audio_output_path: 音声ファイルのパス
         speed: 再生速度
     """
     try:
-        # 音声ファイルの速度調整
+        from pydub import AudioSegment
+        from io import BytesIO
+        
+        # 音声ファイルを読み込み
+        audio = AudioSegment.from_wav(audio_output_path)
+        
+        # 速度調整が必要な場合
         if speed != 1.0:
-            audio = AudioSegment.from_wav(audio_output_path)
-            # フレームレートを変更することで再生速度を調整
+            # フレームレートを変更して速度を調整
+            new_frame_rate = int(audio.frame_rate * speed)
+            # 元のフレームレートを保持したまま速度を変更
             modified_audio = audio._spawn(
-                audio.raw_data, 
-                overrides={"frame_rate": int(audio.frame_rate * speed)}
+                audio.raw_data,
+                overrides={"frame_rate": new_frame_rate}
             )
-            # 変更後の音声データをメモリ上で扱う
-            from io import BytesIO
+            # 標準のサンプリングレートに戻す
+            modified_audio = modified_audio.set_frame_rate(audio.frame_rate)
+            
+            # メモリ上でWAV形式に変換
             buffer = BytesIO()
             modified_audio.export(buffer, format="wav")
             buffer.seek(0)
+            
+            # Streamlitで再生
             st.audio(buffer, format='audio/wav')
         else:
             # 速度変更がない場合はファイルを直接再生
-            st.audio(audio_output_path)
+            with open(audio_output_path, 'rb') as audio_file:
+                audio_bytes = audio_file.read()
+                st.audio(audio_bytes, format='audio/wav')
             
+    except ImportError as e:
+        st.error(f"必要なライブラリがインストールされていません: {str(e)}")
+        # フォールバック: 速度調整なしで再生
+        try:
+            with open(audio_output_path, 'rb') as audio_file:
+                audio_bytes = audio_file.read()
+                st.audio(audio_bytes, format='audio/wav')
+        except Exception as fallback_error:
+            st.error(f"音声ファイルの読み込みに失敗しました: {str(fallback_error)}")
+    
     except Exception as e:
-        print(f"ブラウザ音声再生エラー: {e}")
-        st.error("音声の再生中にエラーが発生しました。")
+        st.error(f"ブラウザ音声再生エラー: {str(e)}")
+        # 最終フォールバック: 速度調整なしで再生を試みる
+        try:
+            with open(audio_output_path, 'rb') as audio_file:
+                audio_bytes = audio_file.read()
+                st.audio(audio_bytes, format='audio/wav')
+        except Exception as final_error:
+            st.error(f"音声ファイルの読み込みに失敗しました: {str(final_error)}")
 
-def play_wav_local(audio_output_path, speed=1.0):
+def play_wav(audio_output_path, speed=1.0):
     """
-    ローカル環境での音声再生
+    音声ファイルの読み上げ(Streamlit Cloud対応版)
     Args:
         audio_output_path: 音声ファイルのパス
         speed: 再生速度
     """
-    import pyaudio # ローカル再生時のみインポートなのでここに置く
-
-    audio = AudioSegment.from_wav(audio_output_path)
-    
-    # 速度変更
-    if speed != 1.0:
-        modified_audio = audio._spawn(
-            audio.raw_data, 
-            overrides={"frame_rate": int(audio.frame_rate * speed)}
-        )
-        temp_audio_path = audio_output_path.replace('.wav', '_temp.wav')
-        modified_audio.export(temp_audio_path, format="wav")
+    try:
+        # Streamlit Cloud環境かローカル環境かを判定
+        if is_streamlit_cloud():
+            # Streamlit Cloudではブラウザで再生
+            play_audio_in_browser(audio_output_path, speed)
+        else:
+            # ローカル環境では従来の再生方法
+            try:
+                play_wav_local(audio_output_path, speed)
+            except Exception as local_error:
+                # ローカルでもPyAudioが使えない場合はブラウザ再生にフォールバック
+                print(f"ローカル再生失敗、ブラウザ再生に切り替え: {local_error}")
+                play_audio_in_browser(audio_output_path, speed)
         
-        import shutil
-        shutil.move(temp_audio_path, audio_output_path)
-
-    # PyAudioで再生
-    with wave.open(audio_output_path, 'rb') as wf:
-        p = pyaudio.PyAudio()
-        stream = p.open(
-            format=p.get_format_from_width(wf.getsampwidth()),
-            channels=wf.getnchannels(),
-            rate=wf.getframerate(),
-            output=True
-        )
-
-        chunk = 1024
-        data = wf.readframes(chunk)
-        while data:
-            stream.write(data)
-            data = wf.readframes(chunk)
-
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
+    except Exception as e:
+        st.error(f"音声再生エラー: {str(e)}")
+        # エラーが発生してもアプリを止めない
 
 
 def cleanup_audio_directory(directory_path):
