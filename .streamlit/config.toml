@@ -1,0 +1,13 @@
+[server]
+# ファイル監視を無効化してinotify制限を回避
+fileWatcherType = "none"
+
+# その他のパフォーマンス設定
+headless = true
+port = 8501
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+# ブラウザの自動起動を無効化
+gatherUsageStats = false

@@ -183,29 +183,7 @@ def initialize_session_state():
     if "messages" in st.session_state:
         return
     
-    # デバッグ情報: 現在の作業ディレクトリとパス情報を出力
-    try:
-        current_dir = os.getcwd()
-        print(f"DEBUG: 現在の作業ディレクトリ: {current_dir}")
-        print(f"DEBUG: AUDIO_INPUT_DIR: {const.AUDIO_INPUT_DIR}")
-        print(f"DEBUG: AUDIO_OUTPUT_DIR: {const.AUDIO_OUTPUT_DIR}")
-        
-        # 絶対パスを取得
-        abs_input_dir = os.path.abspath(const.AUDIO_INPUT_DIR)
-        abs_output_dir = os.path.abspath(const.AUDIO_OUTPUT_DIR)
-        print(f"DEBUG: 絶対パス AUDIO_INPUT_DIR: {abs_input_dir}")
-        print(f"DEBUG: 絶対パス AUDIO_OUTPUT_DIR: {abs_output_dir}")
-        
-        # ディレクトリの存在確認
-        print(f"DEBUG: AUDIO_INPUT_DIR 存在: {os.path.exists(const.AUDIO_INPUT_DIR)}")
-        print(f"DEBUG: AUDIO_OUTPUT_DIR 存在: {os.path.exists(const.AUDIO_OUTPUT_DIR)}")
-        
-        # 親ディレクトリの存在確認
-        parent_dir = os.path.dirname(const.AUDIO_INPUT_DIR)
-        print(f"DEBUG: 親ディレクトリ (audio): {parent_dir}, 存在: {os.path.exists(parent_dir)}")
-        
-    except Exception as debug_e:
-        print(f"DEBUG: デバッグ情報取得エラー: {debug_e}")
+    # 音声ディレクトリの初期化（デバッグ情報なし）
     
     # 全フラグを一括初期化
     initial_state = {
@@ -233,51 +211,22 @@ def initialize_session_state():
     for key, value in initial_state.items():
         st.session_state[key] = value
     
-    # 音声ディレクトリの作成とクリーンアップ
-    print("DEBUG: 音声ディレクトリ初期化開始")
-    
-    # Streamlit Cloudでのファイルシステム制限を考慮した代替案
+    # 音声ディレクトリの作成とクリーンアップ（軽量版）
     try:
-        # まず、現在のディレクトリ構造を確認
-        print("DEBUG: 現在のディレクトリ構造確認")
-        current_dir = os.getcwd()
-        for root, dirs, files in os.walk(current_dir):
-            level = root.replace(current_dir, '').count(os.sep)
-            indent = ' ' * 2 * level
-            print(f"DEBUG: {indent}{os.path.basename(root)}/")
-            subindent = ' ' * 2 * (level + 1)
-            for file in files[:5]:  # 最初の5ファイルのみ表示
-                print(f"DEBUG: {subindent}{file}")
-            if len(files) > 5:
-                print(f"DEBUG: {subindent}... and {len(files) - 5} more files")
-        
         # ディレクトリを作成（存在しない場合は作成）
-        print(f"DEBUG: makedirs実行前 - {const.AUDIO_INPUT_DIR}")
         os.makedirs(const.AUDIO_INPUT_DIR, exist_ok=True)
-        print(f"DEBUG: makedirs実行後 - {const.AUDIO_INPUT_DIR}, 存在: {os.path.exists(const.AUDIO_INPUT_DIR)}")
-        
-        print(f"DEBUG: makedirs実行前 - {const.AUDIO_OUTPUT_DIR}")
         os.makedirs(const.AUDIO_OUTPUT_DIR, exist_ok=True)
-        print(f"DEBUG: makedirs実行後 - {const.AUDIO_OUTPUT_DIR}, 存在: {os.path.exists(const.AUDIO_OUTPUT_DIR)}")
         
         # 残っている音声ファイルを削除（安全に実行）
-        print("DEBUG: cleanup_audio_directory実行開始")
         cleanup_audio_directory(const.AUDIO_INPUT_DIR)
         cleanup_audio_directory(const.AUDIO_OUTPUT_DIR)
-        print("DEBUG: cleanup_audio_directory実行完了")
         
     except Exception as e:
         # エラーが発生してもアプリを停止させない
-        print(f"DEBUG: 音声ディレクトリ初期化エラー: {e}")
-        print(f"DEBUG: エラーの種類: {type(e).__name__}")
-        import traceback
-        print(f"DEBUG: トレースバック: {traceback.format_exc()}")
-        
         # 代替案: 一時ディレクトリを使用
         try:
             import tempfile
             temp_dir = tempfile.gettempdir()
-            print(f"DEBUG: 代替案 - 一時ディレクトリを使用: {temp_dir}")
             
             # 一時ディレクトリ内に音声用サブディレクトリを作成
             alt_input_dir = os.path.join(temp_dir, "audio_input")
@@ -286,14 +235,11 @@ def initialize_session_state():
             os.makedirs(alt_input_dir, exist_ok=True)
             os.makedirs(alt_output_dir, exist_ok=True)
             
-            print(f"DEBUG: 代替ディレクトリ作成完了: {alt_input_dir}, {alt_output_dir}")
-            
             # セッション状態に代替パスを保存（後で使用するため）
             st.session_state.alt_audio_input_dir = alt_input_dir
             st.session_state.alt_audio_output_dir = alt_output_dir
             
-        except Exception as alt_e:
-            print(f"DEBUG: 代替案も失敗: {alt_e}")
+        except Exception:
             pass
 
     # 音声設定の初期化
@@ -487,33 +433,17 @@ def cleanup_audio_directory(directory_path):
         directory_path: クリーンアップするディレクトリのパス
     """
     try:
-        print(f"DEBUG: cleanup_audio_directory開始 - {directory_path}")
-        print(f"DEBUG: ディレクトリ存在: {os.path.exists(directory_path)}")
-        print(f"DEBUG: ディレクトリかどうか: {os.path.isdir(directory_path) if os.path.exists(directory_path) else 'N/A'}")
-        
         if os.path.exists(directory_path) and os.path.isdir(directory_path):
-            print(f"DEBUG: ディレクトリ内のファイル一覧取得開始")
             files = os.listdir(directory_path)
-            print(f"DEBUG: 見つかったファイル数: {len(files)}")
             
             for file in files:
                 file_path = os.path.join(directory_path, file)
-                print(f"DEBUG: 処理中ファイル: {file_path}")
                 if os.path.isfile(file_path):
                     try:
                         os.remove(file_path)
-                        print(f"DEBUG: ファイル削除成功: {file_path}")
-                    except Exception as e:
-                        print(f"DEBUG: ファイル削除エラー: {file_path}, エラー: {e}")
+                    except Exception:
                         pass
-                else:
-                    print(f"DEBUG: ファイルではないためスキップ: {file_path}")
-        else:
-            print(f"DEBUG: ディレクトリが存在しないか、ディレクトリではない: {directory_path}")
-    except Exception as e:
-        print(f"DEBUG: cleanup_audio_directoryエラー: {directory_path}, エラー: {e}")
-        import traceback
-        print(f"DEBUG: トレースバック: {traceback.format_exc()}")
+    except Exception:
         pass
 
 def cleanup_audio_files(*audio_paths):
